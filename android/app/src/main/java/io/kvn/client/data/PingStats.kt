@@ -102,6 +102,17 @@ class PingStats(context: Context) {
     fun order(nodes: List<ServerNode>): List<ServerNode> =
         nodes.sortedByDescending { records[keyOf(it)]?.score ?: UNKNOWN_SCORE }
 
+    /** Копия всей истории: ключ — адрес:порт (см. [keyOf]). */
+    @Synchronized
+    fun snapshot(): Map<String, PingRecord> = records.toMap()
+
+    /** Забыть всю историю проверок. */
+    @Synchronized
+    fun clear() {
+        records.clear()
+        prefs.edit().remove("stats").apply()
+    }
+
     @Synchronized
     fun save() {
         val json = JSONObject()

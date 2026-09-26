@@ -363,6 +363,7 @@ private fun App(
     val sheetError by viewModel.sheetError.collectAsStateWithLifecycle()
     val dnsChecks by viewModel.dnsChecks.collectAsStateWithLifecycle()
     val dnsChecking by viewModel.dnsChecking.collectAsStateWithLifecycle()
+    val findingBest by viewModel.findingBest.collectAsStateWithLifecycle()
 
     var tab by rememberSaveable { mutableStateOf(Tab.HOME) }
     var overlay by rememberSaveable { mutableStateOf(Overlay.NONE) }
@@ -506,6 +507,8 @@ private fun App(
                             onOpenServers = { tab = Tab.SERVERS },
                             onAddSubscription = { adding = true },
                             onHelp = { showIntro = true },
+                            findingBest = findingBest,
+                            onFindBest = viewModel::findBest,
                         )
                         Tab.SERVERS -> ServersScreen(
                             subscriptions = subscriptions,
@@ -516,7 +519,6 @@ private fun App(
                             refreshing = refreshing,
                             onSelect = viewModel::select,
                             onPingAll = viewModel::pingAll,
-                            onFastest = viewModel::selectFastest,
                             onRefreshAll = viewModel::refreshAll,
                             onRefresh = viewModel::refresh,
                             onRename = viewModel::rename,
@@ -531,7 +533,8 @@ private fun App(
                             onToggleEnabled = viewModel::setSubscriptionEnabled,
                             onToggleCollapsed = viewModel::toggleCollapsed,
                             shareLink = viewModel::shareLink,
-                            onScanQr = onScanQr,
+                            view = settings.serverView,
+                            onView = viewModel::setServerView,
                             subLabLabel = settings.account.takeIf { it.server.isNotEmpty() }?.let { account ->
                                 listOf(account.name.ifEmpty { account.username }, account.server.removePrefix("https://"))
                                     .filter { it.isNotEmpty() }.joinToString(" · ")
@@ -555,6 +558,9 @@ private fun App(
                             nodeTestProgress = nodeTestProgress,
                             onTestNodes = viewModel::testAllNodes,
                             onStopNodeTests = viewModel::stopNodeTests,
+                            stats = remember(statsVersion, subscriptions, settings.engine) { viewModel.statsReport() },
+                            onResetStats = viewModel::resetStats,
+                            onAddToWhitelist = viewModel::addToWhitelist,
                         )
                         Tab.SETTINGS -> SettingsScreen(
                             settings = settings,

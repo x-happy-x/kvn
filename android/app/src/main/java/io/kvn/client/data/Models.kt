@@ -231,6 +231,17 @@ enum class ServerSort(val id: String, val title: String) {
     }
 }
 
+/** Вид списка серверов. */
+enum class ServerView(val id: String, val title: String) {
+    LIST("list", "Список"),
+    COMPACT("compact", "Компактно"),
+    CARDS("cards", "Карточки");
+
+    companion object {
+        fun of(id: String?): ServerView = entries.firstOrNull { it.id == id } ?: LIST
+    }
+}
+
 /** Сессия аккаунта sub-lab: хранится только токен, пароль не сохраняется. */
 data class SubLabAccount(
     val server: String = "",
@@ -282,6 +293,7 @@ data class AppSettings(
     /** Вводная инструкция пройдена (или пропущена). */
     val onboarded: Boolean = false,
     val serverSort: ServerSort = ServerSort.SUBSCRIPTIONS,
+    val serverView: ServerView = ServerView.LIST,
     /** Показывать настройки для опытных: ядро, DNS, обход блокировок, диагностику. */
     val advanced: Boolean = false,
     val checks: CheckOptions = CheckOptions(),

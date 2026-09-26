@@ -29,6 +29,8 @@ import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.ArrowDownward
 import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.Memory
+import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
@@ -82,6 +84,8 @@ fun HomeScreen(
     onOpenServers: () -> Unit,
     onAddSubscription: () -> Unit,
     onHelp: () -> Unit = {},
+    findingBest: Boolean = false,
+    onFindBest: () -> Unit = {},
 ) {
     val power = when (state) {
         is VpnState.Connected -> PowerState.ON
@@ -119,7 +123,7 @@ fun HomeScreen(
                 contentKey = { it?.id },
                 label = "server",
             ) { current ->
-                if (current != null) ServerPanel(current, ping, engine, onOpenServers) else EmptyPanel(onAddSubscription)
+                if (current != null) ServerPanel(current, ping, engine, findingBest, onFindBest, onOpenServers) else EmptyPanel(onAddSubscription)
             }
         }
         if (subscription != null && (subscription.total > 0 || subscription.expire > 0 || subscription.announce.isNotEmpty())) {
@@ -284,7 +288,7 @@ private fun TrafficCell(icon: ImageVector, label: String, speed: String, total: 
 }
 
 @Composable
-private fun ServerPanel(node: ServerNode, ping: Int?, engine: Engine, onClick: () -> Unit) {
+private fun ServerPanel(node: ServerNode, ping: Int?, engine: Engine, findingBest: Boolean, onFindBest: () -> Unit, onClick: () -> Unit) {
     Panel(modifier = Modifier.fillMaxWidth(), onClick = onClick) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             FlagBadge(node.flag, size = 44)
@@ -310,6 +314,22 @@ private fun ServerPanel(node: ServerNode, ping: Int?, engine: Engine, onClick: (
                     }
                 }
             }
+            // «Найти лучший»: тот же выбор, что у авто-режима, с проверкой через сервер.
+            Box(
+                Modifier
+                    .size(38.dp)
+                    .clip(CircleShape)
+                    .background(Palette.Violet.copy(alpha = 0.16f))
+                    .clickable(enabled = !findingBest, onClick = onFindBest),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (findingBest) {
+                    CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = Palette.VioletSoft)
+                } else {
+                    Icon(Icons.Rounded.AutoAwesome, contentDescription = "Найти лучший сервер", tint = Palette.VioletSoft, modifier = Modifier.size(20.dp))
+                }
+            }
+            Spacer(Modifier.width(4.dp))
             Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, contentDescription = null, tint = Palette.TextSecondary)
         }
     }

@@ -1,6 +1,30 @@
 package io.kvn.client.ui.screens
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.material.icons.rounded.Dns
+import androidx.compose.material.icons.rounded.Insights
+import androidx.compose.material.icons.rounded.Language
+import androidx.compose.material3.AlertDialog
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.style.TextAlign
+import io.kvn.client.data.ServerStat
+import io.kvn.client.data.StatsReport
+import io.kvn.client.data.SubscriptionStat
+import io.kvn.client.ui.components.FlagBadge
+import io.kvn.client.ui.components.plural
+import kotlin.math.roundToInt
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -63,10 +87,14 @@ import io.kvn.client.data.ServerNode
 import io.kvn.client.ui.ScanProgress
 import io.kvn.client.ui.theme.Palette
 
+/** Вкладки экрана проверок. */
+private enum class CheckTab(val title: String) { SITES("Сайты"), SERVERS("Серверы"), STATS("Статистика") }
+
 /**
- * Проверка доступности ресурсов, как в HomeNet: для каждого сайта — путь
- * напрямую через оператора и путь через VPN, этапы DNS → TCP → TLS → HTTP →
- * объём, и итог: открыт, заблокирован, обходится через VPN или не работает.
+ * Экран «Проверка»: три вкладки. «Сайты» — открываются ли ресурсы напрямую и
+ * через VPN (как в HomeNet), «Серверы» — пропускает ли трафик каждый сервер,
+ * «Статистика» — что копится из всех пингов и проверок. В начале каждой
+ * вкладки сказано, что проверяется и на что это влияет.
  */
 @Composable
 fun ScanScreen(
@@ -86,138 +114,285 @@ fun ScanScreen(
     nodeTestProgress: ScanProgress = ScanProgress(),
     onTestNodes: () -> Unit = {},
     onStopNodeTests: () -> Unit = {},
+    stats: StatsReport? = null,
+    onResetStats: () -> Unit = {},
+    onAddToWhitelist: (String) -> Unit = {},
+) {
+    var tab by rememberSaveable { mutableStateOf(CheckTab.SITES) }
+    Column(Modifier.fillMaxSize()) {
+        Text(
+            "Проверка",
+            fontSize = 26.sp,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(start = 20.dp, top = 16.dp, bottom = 8.dp),
+        )
+        TabSwitch(tab) { tab = it }
+        AnimatedContent(
+            targetState = tab,
+            transitionSpec = {
+                val direction = if (targetState.ordinal > initialState.ordinal) 1 else -1
+                (slideInHorizontally(tween(280)) { direction * it / 6 } + fadeIn(tween(280))) togetherWith
+                    (slideOutHorizontally(tween(280)) { -direction * it / 6 } + fadeOut(tween(180)))
+            },
+            label = "checkTab",
+        ) { current ->
+            when (current) {
+                CheckTab.SITES -> SitesCheck(presets, targets, results, progress, vpnConnected, onAdd, onRemove, onClear, onRun, onRunOne, onStop, onAddToWhitelist)
+                CheckTab.SERVERS -> ServersCheck(nodes, nodeTests, nodeTestProgress, onTestNodes, onStopNodeTests)
+                CheckTab.STATS -> StatsView(stats, onResetStats)
+            }
+        }
+    }
+}
+
+/** Переключатель вкладок: «пилюля» плавно переезжает под выбранную. */
+@Composable
+private fun TabSwitch(selected: CheckTab, onSelect: (CheckTab) -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(Palette.Surface)
+            .border(1.dp, Palette.Stroke, RoundedCornerShape(16.dp))
+            .padding(4.dp),
+    ) {
+        CheckTab.entries.forEach { tab ->
+            val active = tab == selected
+            val background by animateColorAsState(if (active) Palette.Violet else Color.Transparent, tween(250), label = "tabBg")
+            Box(
+                Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(background)
+                    .clickable { onSelect(tab) }
+                    .padding(vertical = 9.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    tab.title,
+                    fontSize = 13.sp,
+                    fontWeight = if (active) FontWeight.SemiBold else FontWeight.Medium,
+                    color = if (active) Palette.TextPrimary else Palette.TextSecondary,
+                )
+            }
+        }
+    }
+}
+
+/** Карточка «что проверяется и на что влияет» в начале вкладки. */
+@Composable
+private fun InfoCard(icon: ImageVector, title: String, what: String, effect: String) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(18.dp))
+            .background(Brush.linearGradient(listOf(Palette.Violet.copy(alpha = 0.16f), Palette.Surface)))
+            .border(1.dp, Palette.Stroke, RoundedCornerShape(18.dp))
+            .padding(14.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier
+                    .size(34.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(Palette.Violet.copy(alpha = 0.22f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(icon, null, tint = Palette.VioletSoft, modifier = Modifier.size(18.dp))
+            }
+            Spacer(Modifier.width(10.dp))
+            Text(title, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+        }
+        Spacer(Modifier.height(10.dp))
+        InfoLine("Что проверяется", what)
+        Spacer(Modifier.height(6.dp))
+        InfoLine("На что влияет", effect)
+    }
+}
+
+@Composable
+private fun InfoLine(label: String, text: String) {
+    Text(label.uppercase(), fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = Palette.TextMuted, letterSpacing = 0.6.sp)
+    Text(text, fontSize = 13.sp, color = Palette.TextSecondary, lineHeight = 18.sp)
+}
+
+/** Плашка-счётчик: число и подпись, цвет — статус. */
+@Composable
+private fun CountTile(value: String, label: String, color: Color, modifier: Modifier) {
+    Column(
+        modifier
+            .clip(RoundedCornerShape(14.dp))
+            .background(Palette.Surface)
+            .border(1.dp, Palette.Stroke, RoundedCornerShape(14.dp))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier
+                    .size(8.dp)
+                    .clip(CircleShape)
+                    .background(color),
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(label, fontSize = 11.sp, color = Palette.TextMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        Spacer(Modifier.height(4.dp))
+        Text(value, fontSize = 22.sp, fontWeight = FontWeight.Bold, color = Palette.TextPrimary)
+    }
+}
+
+@Composable
+private fun RunButton(running: Boolean, enabled: Boolean, title: String, onRun: () -> Unit, onStop: () -> Unit) {
+    Button(
+        onClick = if (running) onStop else onRun,
+        enabled = enabled,
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(48.dp),
+        shape = RoundedCornerShape(14.dp),
+        colors = ButtonDefaults.buttonColors(containerColor = if (running) Palette.SurfaceHighest else Palette.Violet),
+    ) {
+        Icon(if (running) Icons.Rounded.Stop else Icons.Rounded.PlayArrow, null, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(6.dp))
+        Text(if (running) "Остановить" else title)
+    }
+}
+
+@Composable
+private fun ProgressLine(progress: ScanProgress) {
+    if (!progress.running) return
+    Spacer(Modifier.height(8.dp))
+    LinearProgressIndicator(
+        progress = { if (progress.total == 0) 0f else progress.done.toFloat() / progress.total },
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(4.dp)
+            .clip(RoundedCornerShape(2.dp)),
+        color = Palette.Cyan,
+        trackColor = Palette.SurfaceHighest,
+    )
+    Text(
+        "${progress.done} из ${progress.total} · ${progress.current}",
+        color = Palette.TextMuted,
+        fontSize = 12.sp,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier.padding(top = 4.dp),
+    )
+}
+
+@Composable
+private fun SitesCheck(
+    presets: List<ScanPreset>,
+    targets: List<String>,
+    results: Map<String, ScanResult>,
+    progress: ScanProgress,
+    vpnConnected: Boolean,
+    onAdd: (List<String>) -> Unit,
+    onRemove: (String) -> Unit,
+    onClear: () -> Unit,
+    onRun: () -> Unit,
+    onRunOne: (String) -> Unit,
+    onStop: () -> Unit,
+    onAddToWhitelist: (String) -> Unit,
 ) {
     var input by remember { mutableStateOf("") }
     var expanded by remember { mutableStateOf<String?>(null) }
-    var serversMode by rememberSaveable { mutableStateOf(false) }
-
-    if (serversMode) {
-        ServersCheck(
-            nodes = nodes,
-            tests = nodeTests,
-            progress = nodeTestProgress,
-            onModeSites = { serversMode = false },
-            onRun = onTestNodes,
-            onStop = onStopNodeTests,
-        )
-        return
-    }
-
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 24.dp),
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        item {
-            Text(
-                "Проверка",
-                fontSize = 26.sp,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(start = 4.dp, top = 20.dp, bottom = 4.dp),
+        item(key = "info") {
+            InfoCard(
+                Icons.Rounded.Language,
+                "Открываются ли сайты",
+                "Каждый сайт — двумя путями: напрямую через оператора и через VPN. По шагам: адрес (DNS) → соединение → TLS → ответ сайта → загрузка.",
+                "Сама проверка ничего не меняет. Она показывает, что режет оператор и помогает ли VPN. Сайты, которые открываются напрямую, можно одной кнопкой добавить в «Сайты напрямую».",
             )
-            ModeSwitch(servers = false, onChange = { serversMode = it })
-            Spacer(Modifier.height(8.dp))
-            Text(
-                if (vpnConnected) {
-                    "Каждый сайт проверяется напрямую через оператора и через VPN — видно, что заблокировано и помогает ли прокси."
-                } else {
-                    "VPN выключен — проверяется только прямой путь через оператора. Подключитесь, чтобы сравнить с VPN."
-                },
-                color = Palette.TextSecondary,
-                fontSize = 13.sp,
-                modifier = Modifier.padding(horizontal = 4.dp),
-            )
-            Spacer(Modifier.height(12.dp))
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                presets.forEach { preset ->
-                    AssistChip(
-                        onClick = { onAdd(preset.targets) },
-                        label = { Text("+ ${preset.name}", fontSize = 12.sp) },
-                        colors = AssistChipDefaults.assistChipColors(containerColor = Palette.Surface, labelColor = Palette.TextSecondary),
-                        border = AssistChipDefaults.assistChipBorder(enabled = true, borderColor = Palette.Stroke),
-                    )
-                }
-            }
-            Spacer(Modifier.height(8.dp))
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(
-                    value = input,
-                    onValueChange = { input = it },
-                    placeholder = { Text("сайт.ru или https://host/путь") },
-                    singleLine = true,
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(14.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = Palette.Violet,
-                        unfocusedBorderColor = Palette.Stroke,
-                        focusedContainerColor = Palette.Surface,
-                        unfocusedContainerColor = Palette.Surface,
-                    ),
-                )
-                TextButton(
-                    onClick = {
-                        onAdd(input.split(' ', ',', '\n'))
-                        input = ""
-                    },
-                    enabled = input.isNotBlank(),
-                ) { Text("Добавить") }
-            }
-            Spacer(Modifier.height(10.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Button(
-                    onClick = if (progress.running) onStop else onRun,
-                    enabled = targets.isNotEmpty(),
-                    shape = RoundedCornerShape(14.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = if (progress.running) Palette.SurfaceHighest else Palette.Violet),
-                ) {
-                    Icon(if (progress.running) Icons.Rounded.Stop else Icons.Rounded.PlayArrow, null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text(if (progress.running) "Остановить" else "Проверить всё (${targets.size})")
-                }
-                Spacer(Modifier.weight(1f))
-                if (targets.isNotEmpty() && !progress.running) {
-                    TextButton(onClick = onClear) { Text("Очистить", color = Palette.TextMuted) }
-                }
-            }
-            if (progress.running) {
+            if (!vpnConnected) {
                 Spacer(Modifier.height(8.dp))
-                LinearProgressIndicator(
-                    progress = { if (progress.total == 0) 0f else progress.done.toFloat() / progress.total },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(4.dp)
-                        .clip(RoundedCornerShape(2.dp)),
-                    color = Palette.Cyan,
-                    trackColor = Palette.SurfaceHighest,
-                )
                 Text(
-                    "${progress.done} из ${progress.total} · ${progress.current}",
-                    color = Palette.TextMuted,
+                    "VPN выключен — проверяется только прямой путь. Подключитесь, чтобы сравнить с VPN.",
+                    color = Palette.Amber,
                     fontSize = 12.sp,
-                    modifier = Modifier.padding(top = 4.dp),
+                    modifier = Modifier.padding(horizontal = 4.dp),
                 )
             }
-            Spacer(Modifier.height(4.dp))
+        }
+        item(key = "controls") {
+            Column {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    presets.forEach { preset ->
+                        AssistChip(
+                            onClick = { onAdd(preset.targets) },
+                            label = { Text("+ ${preset.name}", fontSize = 12.sp) },
+                            colors = AssistChipDefaults.assistChipColors(containerColor = Palette.Surface, labelColor = Palette.TextSecondary),
+                            border = AssistChipDefaults.assistChipBorder(enabled = true, borderColor = Palette.Stroke),
+                        )
+                    }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = input,
+                        onValueChange = { input = it },
+                        placeholder = { Text("сайт.ru или https://host/путь") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(14.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = Palette.Violet,
+                            unfocusedBorderColor = Palette.Stroke,
+                            focusedContainerColor = Palette.Surface,
+                            unfocusedContainerColor = Palette.Surface,
+                        ),
+                    )
+                    TextButton(
+                        onClick = {
+                            onAdd(input.split(' ', ',', '\n'))
+                            input = ""
+                        },
+                        enabled = input.isNotBlank(),
+                    ) { Text("Добавить") }
+                }
+                Spacer(Modifier.height(8.dp))
+                RunButton(progress.running, targets.isNotEmpty(), "Проверить сайты (${targets.size})", onRun, onStop)
+                ProgressLine(progress)
+                if (results.isNotEmpty() && !progress.running) {
+                    Spacer(Modifier.height(10.dp))
+                    val values = results.values
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        CountTile("${values.count { it.verdict == "open" }}", "открыты", Palette.Green, Modifier.weight(1f))
+                        CountTile("${values.count { it.verdict == "bypassed" }}", "через VPN", Palette.Cyan, Modifier.weight(1f))
+                        CountTile("${values.count { it.verdict in setOf("blocked", "down", "error", "proxy-broken") }}", "не открыты", Palette.Red, Modifier.weight(1f))
+                    }
+                }
+                if (targets.isNotEmpty() && !progress.running) {
+                    TextButton(onClick = onClear) { Text("Очистить список", color = Palette.TextMuted) }
+                }
+            }
         }
 
         val ordered = targets.sortedByDescending { verdictRank(results[it]?.verdict) }
         items(ordered, key = { it }) { target ->
-          Box(Modifier.animateItem()) {
-            TargetCard(
-                target = target,
-                result = results[target],
-                running = progress.running && results[target] == null,
-                expanded = expanded == target,
-                onToggle = { expanded = if (expanded == target) null else target },
-                onRun = { onRunOne(target) },
-                onRemove = { onRemove(target) },
-            )
-          }
+            Box(Modifier.animateItem()) {
+                TargetCard(
+                    target = target,
+                    result = results[target],
+                    running = progress.running && results[target] == null,
+                    expanded = expanded == target,
+                    onToggle = { expanded = if (expanded == target) null else target },
+                    onRun = { onRunOne(target) },
+                    onRemove = { onRemove(target) },
+                    onAddToWhitelist = { onAddToWhitelist(target) },
+                )
+            }
         }
     }
 }
@@ -257,6 +432,7 @@ private fun TargetCard(
     onToggle: () -> Unit,
     onRun: () -> Unit,
     onRemove: () -> Unit,
+    onAddToWhitelist: () -> Unit,
 ) {
     val shape = RoundedCornerShape(18.dp)
     Column(
@@ -297,7 +473,7 @@ private fun TargetCard(
             }
         }
         AnimatedVisibility(visible = expanded && result != null) {
-            if (result != null) ScanDetails(result, onRun, onRemove)
+            if (result != null) ScanDetails(result, onRun, onRemove, onAddToWhitelist)
         }
     }
 }
@@ -321,7 +497,7 @@ private fun PathBadge(path: ScanPath) {
 }
 
 @Composable
-private fun ScanDetails(result: ScanResult, onRun: () -> Unit, onRemove: () -> Unit) {
+private fun ScanDetails(result: ScanResult, onRun: () -> Unit, onRemove: () -> Unit, onAddToWhitelist: () -> Unit) {
     Column(Modifier.padding(top = 10.dp)) {
         result.paths.forEach { path ->
             Text(path.title, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Palette.TextPrimary)
@@ -376,29 +552,14 @@ private fun ScanDetails(result: ScanResult, onRun: () -> Unit, onRemove: () -> U
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = onRun) { Text("Проверить ещё раз") }
+            // Открывается напрямую — можно не гонять через VPN.
+            if (result.paths.any { it.id == "direct" && it.verdict == "ok" }) {
+                TextButton(onClick = onAddToWhitelist) { Text("Пускать напрямую") }
+            }
             Spacer(Modifier.weight(1f))
             IconButton(onClick = onRemove) {
                 Icon(Icons.Rounded.Close, contentDescription = "Убрать", tint = Palette.TextMuted)
             }
-        }
-    }
-}
-
-@Composable
-private fun ModeSwitch(servers: Boolean, onChange: (Boolean) -> Unit) {
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(horizontal = 4.dp)) {
-        listOf(false to "Сайты", true to "Серверы").forEach { (value, title) ->
-            FilterChip(
-                selected = servers == value,
-                onClick = { onChange(value) },
-                label = { Text(title) },
-                colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = Palette.Violet,
-                    selectedLabelColor = Palette.TextPrimary,
-                    containerColor = Palette.Surface,
-                    labelColor = Palette.TextSecondary,
-                ),
-            )
         }
     }
 }
@@ -420,63 +581,35 @@ private fun ServersCheck(
     nodes: List<ServerNode>,
     tests: Map<String, NodeTest>,
     progress: ScanProgress,
-    onModeSites: () -> Unit,
     onRun: () -> Unit,
     onStop: () -> Unit,
 ) {
     val ordered = nodes.sortedWith(compareBy({ testRank(tests[it.id]) }, { tests[it.id]?.ms ?: Int.MAX_VALUE }))
-    val silent = tests.values.count { it.verdict == "silent" }
-    val working = tests.values.count { it.ok }
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 24.dp),
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        item {
-            Text(
-                "Проверка",
-                fontSize = 26.sp,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(start = 4.dp, top = 20.dp, bottom = 4.dp),
+        item(key = "info") {
+            InfoCard(
+                Icons.Rounded.Dns,
+                "Работают ли серверы",
+                "Каждый сервер по очереди открывает адрес проверки через себя — в отдельном экземпляре ядра, подключённый VPN не трогается. Видно и те, что пингуются, но ничего не открывают.",
+                "Результаты идут в статистику: авто-режим, «Найти лучший» и порядок пинга выбирают надёжные серверы первыми, а «молчащие» опускаются вниз.",
             )
-            ModeSwitch(servers = true, onChange = { if (!it) onModeSites() })
-            Spacer(Modifier.height(8.dp))
-            Text(
-                "Каждый сервер открывает страницу через себя, отдельно от VPN. Так видно те, что пингуются, но ничего не открывают. Результаты попадают в статистику, и пинг потом начинается с надёжных.",
-                color = Palette.TextSecondary,
-                fontSize = 13.sp,
-                modifier = Modifier.padding(horizontal = 4.dp),
-            )
-            Spacer(Modifier.height(10.dp))
-            Button(
-                onClick = if (progress.running) onStop else onRun,
-                enabled = nodes.isNotEmpty(),
-                shape = RoundedCornerShape(14.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = if (progress.running) Palette.SurfaceHighest else Palette.Violet),
-            ) {
-                Icon(if (progress.running) Icons.Rounded.Stop else Icons.Rounded.PlayArrow, null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(6.dp))
-                Text(if (progress.running) "Остановить" else "Проверить все серверы (${nodes.size})")
-            }
-            if (progress.running) {
-                Spacer(Modifier.height(8.dp))
-                LinearProgressIndicator(
-                    progress = { if (progress.total == 0) 0f else progress.done.toFloat() / progress.total },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(4.dp)
-                        .clip(RoundedCornerShape(2.dp)),
-                    color = Palette.Cyan,
-                    trackColor = Palette.SurfaceHighest,
-                )
-                Text("${progress.done} из ${progress.total} · ${progress.current}", color = Palette.TextMuted, fontSize = 12.sp)
-            } else if (tests.isNotEmpty()) {
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    "Работают: $working · пингуются без ответа: $silent · всего: ${tests.size}",
-                    color = Palette.TextMuted,
-                    fontSize = 12.sp,
-                )
+        }
+        item(key = "controls") {
+            Column {
+                if (tests.isNotEmpty()) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        CountTile("${tests.values.count { it.ok }}", "работают", Palette.Green, Modifier.weight(1f))
+                        CountTile("${tests.values.count { it.verdict == "silent" }}", "не открывают", Palette.Red, Modifier.weight(1f))
+                        CountTile("${tests.values.count { it.verdict == "down" || it.verdict == "error" }}", "недоступны", Palette.Amber, Modifier.weight(1f))
+                    }
+                    Spacer(Modifier.height(10.dp))
+                }
+                RunButton(progress.running, nodes.isNotEmpty(), "Проверить серверы (${nodes.size})", onRun, onStop)
+                ProgressLine(progress)
             }
         }
         items(ordered, key = { it.id }) { node ->
@@ -538,5 +671,233 @@ private fun NodeTestRow(node: ServerNode, test: NodeTest?, running: Boolean) {
             fontSize = 12.sp,
             fontWeight = FontWeight.SemiBold,
         )
+    }
+}
+
+/**
+ * Статистика: сводка, надёжные и проблемные серверы, подписки. Полосы — одна
+ * мера (доля успешных проверок), цвет — статус с подписью в процентах.
+ */
+@Composable
+private fun StatsView(stats: StatsReport?, onReset: () -> Unit) {
+    var confirmReset by remember { mutableStateOf(false) }
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        item(key = "info") {
+            InfoCard(
+                Icons.Rounded.Insights,
+                "Как копится статистика",
+                "Каждый пинг, каждая проверка серверов и выбор в авто-режиме записываются. Надёжность — доля успешных проверок, свежие весят больше старых. Серверы узнаются по адресу, так что история переживает переименования и общая для обоих ядер.",
+                "По ней работают авто-режим и «Найти лучший», с неё начинается пинг, по ней сортировка «По доступности».",
+            )
+        }
+        if (stats == null || stats.empty) {
+            item(key = "empty") {
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 32.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Icon(Icons.Rounded.Insights, null, tint = Palette.TextMuted, modifier = Modifier.size(40.dp))
+                    Spacer(Modifier.height(10.dp))
+                    Text("Статистики пока нет", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        "Нажмите «Пинг всех» на экране серверов или проверьте серверы на соседней вкладке.",
+                        color = Palette.TextSecondary,
+                        fontSize = 13.sp,
+                        textAlign = TextAlign.Center,
+                    )
+                }
+            }
+            return@LazyColumn
+        }
+        item(key = "hero") {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                HeroTile("${(stats.reliability * 100).roundToInt()}%", "средняя надёжность", Modifier.weight(1f))
+                HeroTile("${stats.workingServers}/${stats.checkedServers}", "серверов работает", Modifier.weight(1f))
+                HeroTile(if (stats.avgMs > 0) "${stats.avgMs}" else "—", "мс в среднем", Modifier.weight(1f))
+            }
+            Text(
+                "Проверок: ${stats.totalChecks} · проверено ${stats.checkedServers} из ${stats.totalServers} серверов",
+                color = Palette.TextMuted,
+                fontSize = 12.sp,
+                modifier = Modifier.padding(start = 4.dp, top = 6.dp),
+            )
+        }
+        if (stats.reliable.isNotEmpty()) {
+            item(key = "reliable-title") { StatsTitle("Чаще всего работают") }
+            items(stats.reliable, key = { "r-" + it.node.id }) { stat ->
+                ServerStatRow(Modifier.animateItem(), stat)
+            }
+        }
+        if (stats.subscriptions.isNotEmpty()) {
+            item(key = "subs-title") { StatsTitle("Подписки") }
+            items(stats.subscriptions, key = { "s-" + it.subscription.id }) { stat ->
+                SubscriptionStatRow(Modifier.animateItem(), stat)
+            }
+        }
+        if (stats.problematic.isNotEmpty()) {
+            item(key = "problem-title") { StatsTitle("Часто не отвечают") }
+            items(stats.problematic, key = { "p-" + it.node.id }) { stat ->
+                ServerStatRow(Modifier.animateItem(), stat)
+            }
+        }
+        item(key = "reset") {
+            TextButton(onClick = { confirmReset = true }, modifier = Modifier.padding(top = 8.dp)) {
+                Text("Сбросить статистику", color = Palette.TextMuted)
+            }
+        }
+    }
+    if (confirmReset) {
+        AlertDialog(
+            onDismissRequest = { confirmReset = false },
+            containerColor = Palette.SurfaceHigh,
+            title = { Text("Сбросить статистику?") },
+            text = { Text("История всех пингов и проверок пропадёт, авто-режим начнёт узнавать серверы заново.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmReset = false
+                    onReset()
+                }) { Text("Сбросить", color = Palette.Red) }
+            },
+            dismissButton = { TextButton(onClick = { confirmReset = false }) { Text("Отмена") } },
+        )
+    }
+}
+
+@Composable
+private fun StatsTitle(text: String) {
+    Text(
+        text.uppercase(),
+        color = Palette.TextMuted,
+        fontSize = 11.sp,
+        fontWeight = FontWeight.SemiBold,
+        letterSpacing = 0.6.sp,
+        modifier = Modifier.padding(start = 4.dp, top = 14.dp, bottom = 2.dp),
+    )
+}
+
+/** Крупное число сводки. */
+@Composable
+private fun HeroTile(value: String, label: String, modifier: Modifier) {
+    Column(
+        modifier
+            .clip(RoundedCornerShape(16.dp))
+            .background(Brush.verticalGradient(listOf(Palette.SurfaceHigh, Palette.Surface)))
+            .border(1.dp, Palette.Stroke, RoundedCornerShape(16.dp))
+            .padding(horizontal = 12.dp, vertical = 12.dp),
+    ) {
+        Text(value, fontSize = 24.sp, fontWeight = FontWeight.Bold, color = Palette.TextPrimary, maxLines = 1)
+        Text(label, fontSize = 11.sp, color = Palette.TextMuted, maxLines = 2, lineHeight = 14.sp)
+    }
+}
+
+/** Цвет статуса надёжности: всегда рядом с подписью в процентах. */
+private fun rateColor(rate: Double): Color = when {
+    rate >= 0.8 -> Palette.Green
+    rate > StatsReport.WORKING_RATE -> Palette.Amber
+    else -> Palette.Red
+}
+
+/** Горизонтальная полоса доли 0..1 со скруглённым концом; заполняется плавно. */
+@Composable
+private fun RateBar(rate: Double, color: Color, modifier: Modifier = Modifier) {
+    var shown by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { shown = true }
+    val fraction by animateFloatAsState(if (shown) rate.toFloat().coerceIn(0f, 1f) else 0f, tween(700), label = "rate")
+    Box(
+        modifier
+            .fillMaxWidth()
+            .height(6.dp)
+            .clip(RoundedCornerShape(3.dp))
+            .background(Palette.SurfaceHighest),
+    ) {
+        Box(
+            Modifier
+                .fillMaxWidth(fraction)
+                .fillMaxHeight()
+                .clip(RoundedCornerShape(3.dp))
+                .background(color),
+        )
+    }
+}
+
+@Composable
+private fun ServerStatRow(modifier: Modifier, stat: ServerStat) {
+    val rate = stat.record.successRate
+    Column(
+        modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(Palette.Surface)
+            .border(1.dp, Palette.Stroke, RoundedCornerShape(16.dp))
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            FlagBadge(stat.node.flag, size = 28)
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f)) {
+                Text(stat.node.title, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(
+                    listOfNotNull(
+                        stat.subscription,
+                        stat.record.avgMs.takeIf { it > 0 }?.let { "~${it.roundToInt()} мс" },
+                        "${stat.record.checks} ${plural(stat.record.checks.toLong(), "проверка", "проверки", "проверок")}",
+                    ).joinToString(" · "),
+                    color = Palette.TextMuted,
+                    fontSize = 11.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Text("${(rate * 100).roundToInt()}%", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Palette.TextPrimary)
+        }
+        Spacer(Modifier.height(8.dp))
+        RateBar(rate, rateColor(rate))
+    }
+}
+
+@Composable
+private fun SubscriptionStatRow(modifier: Modifier, stat: SubscriptionStat) {
+    val share = if (stat.checked == 0) 0.0 else stat.working.toDouble() / stat.checked
+    Column(
+        modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(Palette.Surface)
+            .border(1.dp, Palette.Stroke, RoundedCornerShape(16.dp))
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(stat.subscription.name, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(
+                    if (stat.checked == 0) {
+                        "ещё не проверялась · ${stat.total} ${plural(stat.total.toLong(), "сервер", "сервера", "серверов")}"
+                    } else {
+                        listOfNotNull(
+                            "работают ${stat.working} из ${stat.checked}",
+                            stat.avgMs.takeIf { it > 0 }?.let { "~$it мс" },
+                            stat.best?.let { "лучший: ${it.node.title}" },
+                        ).joinToString(" · ")
+                    },
+                    color = Palette.TextMuted,
+                    fontSize = 11.sp,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            if (stat.checked > 0) {
+                Text("${(share * 100).roundToInt()}%", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Palette.TextPrimary)
+            }
+        }
+        if (stat.checked > 0) {
+            Spacer(Modifier.height(8.dp))
+            RateBar(share, rateColor(share))
+        }
     }
 }

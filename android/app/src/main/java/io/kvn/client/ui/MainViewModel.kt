@@ -365,22 +365,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /**
-     * Выбирает лучший из отвечающих сейчас серверов: по статистике (как часто
-     * работает и насколько быстро), а не по одному последнему пингу.
-     */
-    fun selectFastest() {
-        val best = repository.allNodes
-            .filter { it.supports(repository.engineFor(it)) }
-            .filter { node -> (_pings.value[node.id] ?: 0) > 0 || _nodeTests.value[node.id]?.ok == true }
-            .maxByOrNull { pingStats.get(it)?.score ?: 0.0 }
-        if (best == null) {
-            _messages.tryEmit("Сначала проверьте пинг")
-            return
-        }
-        select(best)
-    }
-
     // ---------- аккаунт sub-lab ----------
 
     fun subLabLogin(server: String, login: String, password: String, onDone: () -> Unit) {
@@ -558,6 +542,54 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun setServerSort(sort: ServerSort) = updateSettings(restart = false) { it.copy(serverSort = sort) }
+
+    fun setServerView(view: io.kvn.client.data.ServerView) = updateSettings(restart = false) { it.copy(serverView = view) }
+
+    // ---------- лучший сервер и статистика ----------
+
+    private val _findingBest = MutableStateFlow(false)
+    val findingBest: StateFlow<Boolean> = _findingBest.asStateFlow()
+
+    /**
+     * «Найти лучший» на главной: тот же выбор, что у авто-режима — по истории,
+     * с быстрым пингом и настоящей проверкой через сервер.
+     */
+    fun findBest() {
+        if (_findingBest.value) return
+        viewModelScope.launch {
+            _findingBest.value = true
+            val best = runCatching { io.kvn.client.vpn.AutoSelector(repository, pingStats).pickBest(around = repository.selectedNode()) }.getOrNull()
+            _findingBest.value = false
+            _statsVersion.update { it + 1 }
+            if (best == null) {
+                _messages.tryEmit("Рабочих серверов не нашлось — проверьте подписки")
+                return@launch
+            }
+            if (best.id == repository.selectedNode()?.id) {
+                _messages.tryEmit("«${best.title}» и так лучший")
+            } else {
+                select(best)
+                _messages.tryEmit("Выбран «${best.title}»")
+            }
+        }
+    }
+
+    /** Статистика для экрана проверок; пересчитывается по [statsVersion]. */
+    fun statsReport(): io.kvn.client.data.StatsReport =
+        io.kvn.client.data.StatsReport.build(subscriptions.value, { it.visibleNodes(settings.value.engine) }, pingStats.snapshot())
+
+    fun resetStats() {
+        pingStats.clear()
+        _statsVersion.update { it + 1 }
+        _messages.tryEmit("Статистика сброшена")
+    }
+
+    /** Сайт из проверки — в белый список («Сайты напрямую»). */
+    fun addToWhitelist(target: String) {
+        val count = addWhitelistDomains(target)
+        _messages.tryEmit(if (count > 0) "«$target» теперь открывается напрямую" else "«$target» уже в списке")
+        if (count > 0) restartIfActive()
+    }
 
     /** Применяет накопленные правки маршрутизации к работающему VPN. */
     fun applyRouting() = restartIfActive()

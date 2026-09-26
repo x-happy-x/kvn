@@ -30,8 +30,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -68,6 +66,20 @@ import androidx.compose.ui.unit.sp
 import io.kvn.client.core.Engine
 import io.kvn.client.data.ServerNode
 import io.kvn.client.data.ServerSort
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.material.icons.automirrored.rounded.Sort
+import androidx.compose.material.icons.automirrored.rounded.ViewList
+import androidx.compose.material.icons.rounded.GridView
+import androidx.compose.material.icons.rounded.ViewHeadline
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.PlainTooltip
+import androidx.compose.material3.TooltipBox
+import androidx.compose.material3.TooltipDefaults
+import androidx.compose.material3.rememberTooltipState
+import io.kvn.client.data.ServerView
 import io.kvn.client.data.NodeTest
 import io.kvn.client.data.PingRecord
 import io.kvn.client.data.Subscription
@@ -85,6 +97,26 @@ import io.kvn.client.ui.theme.Palette
 import java.text.DateFormat
 import java.util.Date
 
+/** Строка списка: сервер, его подписка и история проверок. */
+private data class ServerEntry(val node: ServerNode, val subscription: Subscription, val record: PingRecord?)
+
+/** Элемент сетки: заголовок группы, заголовок подписки или сервер. */
+private sealed interface GridItem {
+    val key: String
+
+    data class Group(val title: String, val subtitle: String, val accent: Boolean) : GridItem {
+        override val key get() = "group-$title"
+    }
+
+    data class Header(val subscription: Subscription) : GridItem {
+        override val key get() = "header-${subscription.id}"
+    }
+
+    data class Server(val entry: ServerEntry, val caption: String?) : GridItem {
+        override val key get() = entry.node.id
+    }
+}
+
 @Composable
 fun ServersScreen(
     subscriptions: List<Subscription>,
@@ -95,7 +127,6 @@ fun ServersScreen(
     refreshing: Boolean,
     onSelect: (ServerNode) -> Unit,
     onPingAll: () -> Unit,
-    onFastest: () -> Unit,
     onRefreshAll: () -> Unit,
     onRefresh: (Subscription) -> Unit,
     onRename: (Subscription, String) -> Unit,
@@ -107,10 +138,11 @@ fun ServersScreen(
     pingRecord: (ServerNode) -> PingRecord? = { null },
     sort: ServerSort = ServerSort.SUBSCRIPTIONS,
     onSort: (ServerSort) -> Unit = {},
+    view: ServerView = ServerView.LIST,
+    onView: (ServerView) -> Unit = {},
     onToggleEnabled: (Subscription, Boolean) -> Unit = { _, _ -> },
     onToggleCollapsed: (Subscription) -> Unit = {},
     shareLink: (ServerNode) -> String? = { null },
-    onScanQr: () -> Unit = {},
     /** Аккаунт sub-lab для заголовка группы, например «Иван · sub.example.com». */
     subLabLabel: String? = null,
     subLabTags: Set<String> = emptySet(),
@@ -120,147 +152,273 @@ fun ServersScreen(
     val shareNode: (ServerNode) -> Unit = { node -> shareLink(node)?.let { sharing = node.name to it } }
     sharing?.let { (title, link) -> QrShareDialog(title, link) { sharing = null } }
 
+    val gridItems = remember(subscriptions, engine, pings, sort, statsVersion, subLabLabel, subLabTags) {
+        buildGrid(subscriptions, engine, pings, sort, pingRecord, subLabLabel, subLabTags)
+    }
+    val serverCount = remember(subscriptions, engine) { subscriptions.filter { it.enabled }.sumOf { it.visibleNodes(engine).size } }
+
     Column(Modifier.fillMaxSize()) {
-        Text(
-            "Серверы",
-            fontSize = 26.sp,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(start = 20.dp, top = 16.dp, bottom = 8.dp),
+        Toolbar(
+            serverCount = serverCount,
+            subscriptionCount = subscriptions.size,
+            pinging = pinging,
+            refreshing = refreshing,
+            sort = sort,
+            view = view,
+            onPingAll = onPingAll,
+            onRefreshAll = onRefreshAll,
+            onSort = onSort,
+            onView = onView,
+            onAdd = onAdd,
         )
-        // Подписанные действия вместо одних значков: что делает кнопка, видно сразу.
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            ActionButton(Icons.Rounded.NetworkCheck, if (pinging) "Пингую…" else "Пинг всех", busy = pinging, onClick = onPingAll)
-            ActionButton(Icons.Rounded.Bolt, "Выбрать лучший", onClick = onFastest)
-            ActionButton(Icons.Rounded.Refresh, if (refreshing) "Обновляю…" else "Обновить подписки", busy = refreshing, onClick = onRefreshAll)
-            ActionButton(Icons.Rounded.QrCodeScanner, "Сканировать QR", onClick = onScanQr)
-            ActionButton(Icons.Rounded.Add, "Добавить", accent = true, onClick = onAdd)
-        }
-        Text(
-            "«Пинг всех» проверяет доступность серверов, «Выбрать лучший» — берёт самый надёжный и быстрый по истории проверок. Долгое нажатие на сервер — поделиться им по QR.",
-            color = Palette.TextMuted,
-            fontSize = 11.sp,
-            modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 6.dp, bottom = 4.dp),
-        )
-        SortRow(sort, onSort)
 
         if (subscriptions.isEmpty()) {
             EmptyServers(onAdd)
             return@Column
         }
 
-        // Общий список для сортировки по пингу или доступности: подписка видна в строке.
-        val flat = remember(subscriptions, engine, pings, sort, statsVersion) {
-            if (sort == ServerSort.SUBSCRIPTIONS) {
-                emptyList()
-            } else {
-                val all = subscriptions.filter { it.enabled }.flatMap { subscription ->
-                    subscription.visibleNodes(engine).map { node -> Triple(node, subscription, pingRecord(node)) }
+        // Карточки — по две в ряд, заголовки всегда на всю ширину.
+        val columns = if (view == ServerView.CARDS) 2 else 1
+        LazyVerticalGrid(
+            columns = GridCells.Fixed(columns),
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(if (view == ServerView.COMPACT) 4.dp else 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            items(
+                items = gridItems,
+                key = { it.key },
+                span = { item -> GridItemSpan(if (item is GridItem.Server) 1 else maxLineSpan) },
+            ) { item ->
+                when (item) {
+                    is GridItem.Group -> GroupHeader(Modifier.animateItem(), item.title, item.subtitle, item.accent)
+                    is GridItem.Header -> Box(Modifier.animateItem()) {
+                        SubscriptionHeader(
+                            item.subscription, engine, onRefresh, onRename, onDelete, onSetEngine,
+                            onToggleEnabled = onToggleEnabled,
+                            onToggleCollapsed = onToggleCollapsed,
+                            onShare = { sharing = item.subscription.name to item.subscription.url },
+                        )
+                    }
+                    is GridItem.Server -> {
+                        val (node, subscription, record) = item.entry
+                        val enabled = subscription.enabled
+                        val onClick = { if (enabled) onSelect(node) else onToggleEnabled(subscription, true) }
+                        val common = Modifier.animateItem()
+                        when (view) {
+                            ServerView.LIST -> ServerRow(
+                                modifier = common,
+                                node = node,
+                                selected = node.id == selectedId,
+                                engine = subscription.effectiveEngine(engine),
+                                ping = pings[node.id],
+                                record = record,
+                                test = nodeTests[node.id],
+                                caption = item.caption,
+                                disabled = !enabled,
+                                onClick = onClick,
+                                onLongClick = { shareNode(node) },
+                            )
+                            ServerView.COMPACT -> ServerCompactRow(
+                                modifier = common,
+                                node = node,
+                                selected = node.id == selectedId,
+                                supported = node.supports(subscription.effectiveEngine(engine)) && enabled,
+                                ping = pings[node.id],
+                                onClick = onClick,
+                                onLongClick = { shareNode(node) },
+                            )
+                            ServerView.CARDS -> ServerCard(
+                                modifier = common,
+                                node = node,
+                                selected = node.id == selectedId,
+                                supported = node.supports(subscription.effectiveEngine(engine)) && enabled,
+                                ping = pings[node.id],
+                                record = record,
+                                onClick = onClick,
+                                onLongClick = { shareNode(node) },
+                            )
+                        }
+                    }
                 }
-                when (sort) {
-                    ServerSort.PING -> all.sortedWith(
-                        compareBy<Triple<ServerNode, Subscription, PingRecord?>>(
-                            { (node, subscription, _) -> if (node.supports(subscription.effectiveEngine(engine))) 0 else 1 },
-                            { (node, _, _) ->
-                                val ms = pings[node.id]
-                                when {
-                                    ms == null -> 1
-                                    ms > 0 -> 0
-                                    else -> 2
-                                }
-                            },
-                            { (node, _, record) -> pings[node.id]?.takeIf { it > 0 } ?: record?.avgMs?.toInt()?.takeIf { it > 0 } ?: Int.MAX_VALUE },
-                        ),
-                    )
-                    else -> all.sortedWith(
-                        compareBy<Triple<ServerNode, Subscription, PingRecord?>>(
-                            { (node, subscription, _) -> if (node.supports(subscription.effectiveEngine(engine))) 0 else 1 },
-                            { (node, _, _) -> if ((pings[node.id] ?: 0) < 0) 1 else 0 },
-                        ).thenByDescending { (_, _, record) -> record?.successRate ?: 0.4 }
-                            .thenByDescending { (_, _, record) -> record?.score ?: 0.0 },
+            }
+        }
+    }
+}
+
+/**
+ * Список для сетки. По подпискам — группа sub-lab сверху, свои ниже, у каждой
+ * подписки заголовок (свёрнутые без серверов). По пингу и доступности — общий
+ * список включённых подписок, подписка видна в строке.
+ */
+private fun buildGrid(
+    subscriptions: List<Subscription>,
+    engine: Engine,
+    pings: Pings,
+    sort: ServerSort,
+    pingRecord: (ServerNode) -> PingRecord?,
+    subLabLabel: String?,
+    subLabTags: Set<String>,
+): List<GridItem> {
+    if (sort != ServerSort.SUBSCRIPTIONS) {
+        val all = subscriptions.filter { it.enabled }.flatMap { subscription ->
+            subscription.visibleNodes(engine).map { node -> ServerEntry(node, subscription, pingRecord(node)) }
+        }
+        val supported = compareBy<ServerEntry> { if (it.node.supports(it.subscription.effectiveEngine(engine))) 0 else 1 }
+        val sorted = when (sort) {
+            ServerSort.PING -> all.sortedWith(
+                supported
+                    .thenBy { entry ->
+                        val ms = pings[entry.node.id]
+                        when {
+                            ms == null -> 1
+                            ms > 0 -> 0
+                            else -> 2
+                        }
+                    }
+                    .thenBy { entry -> pings[entry.node.id]?.takeIf { it > 0 } ?: entry.record?.avgMs?.toInt()?.takeIf { it > 0 } ?: Int.MAX_VALUE },
+            )
+            else -> all.sortedWith(
+                supported
+                    .thenBy { entry -> if ((pings[entry.node.id] ?: 0) < 0) 1 else 0 }
+                    .thenByDescending { entry -> entry.record?.successRate ?: 0.4 }
+                    .thenByDescending { entry -> entry.record?.score ?: 0.0 },
+            )
+        }
+        return sorted.map { GridItem.Server(it, it.subscription.name) }
+    }
+    val fromSubLab = subscriptions.filter { it.source == SubscriptionSource.SUBLAB }
+    val own = subscriptions.filter { it.source != SubscriptionSource.SUBLAB }
+    val out = mutableListOf<GridItem>()
+    fun addSubscription(subscription: Subscription) {
+        out += GridItem.Header(subscription)
+        if (subscription.collapsed) return
+        subscription.visibleNodes(engine).forEach { node ->
+            out += GridItem.Server(ServerEntry(node, subscription, pingRecord(node)), null)
+        }
+    }
+    if (fromSubLab.isNotEmpty()) {
+        val subtitle = listOfNotNull(subLabLabel, subLabTags.takeIf { it.isNotEmpty() }?.sorted()?.joinToString(" ") { "#$it" }).joinToString(" · ")
+        out += GridItem.Group("sub-lab", subtitle, accent = true)
+        fromSubLab.forEach(::addSubscription)
+        if (own.isNotEmpty()) out += GridItem.Group("Свои подписки", "", accent = false)
+    }
+    own.forEach(::addSubscription)
+    return out
+}
+
+/**
+ * Шапка экрана: заголовок, счётчик и действия значками — пинг, обновление,
+ * вид, порядок и «добавить». Подписи — в подсказке по долгому нажатию и в
+ * меню вида/порядка.
+ */
+@Composable
+private fun Toolbar(
+    serverCount: Int,
+    subscriptionCount: Int,
+    pinging: Boolean,
+    refreshing: Boolean,
+    sort: ServerSort,
+    view: ServerView,
+    onPingAll: () -> Unit,
+    onRefreshAll: () -> Unit,
+    onSort: (ServerSort) -> Unit,
+    onView: (ServerView) -> Unit,
+    onAdd: () -> Unit,
+) {
+    var sortMenu by remember { mutableStateOf(false) }
+    var viewMenu by remember { mutableStateOf(false) }
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(start = 20.dp, end = 12.dp, top = 14.dp, bottom = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text("Серверы", fontSize = 26.sp, fontWeight = FontWeight.Bold)
+            Text(
+                "$serverCount ${plural(serverCount.toLong(), "сервер", "сервера", "серверов")} · " +
+                    "$subscriptionCount ${plural(subscriptionCount.toLong(), "подписка", "подписки", "подписок")} · ${sort.title.lowercase()}",
+                color = Palette.TextMuted,
+                fontSize = 12.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        ToolIcon(Icons.Rounded.NetworkCheck, "Пинг всех серверов", busy = pinging, onClick = onPingAll)
+        ToolIcon(Icons.Rounded.Refresh, "Обновить подписки", busy = refreshing, onClick = onRefreshAll)
+        Box {
+            ToolIcon(
+                when (view) {
+                    ServerView.LIST -> Icons.AutoMirrored.Rounded.ViewList
+                    ServerView.COMPACT -> Icons.Rounded.ViewHeadline
+                    ServerView.CARDS -> Icons.Rounded.GridView
+                },
+                "Вид: ${view.title}",
+            ) { viewMenu = true }
+            DropdownMenu(expanded = viewMenu, onDismissRequest = { viewMenu = false }) {
+                ServerView.entries.forEach { option ->
+                    DropdownMenuItem(
+                        text = { Text(option.title, color = if (option == view) Palette.VioletSoft else Palette.TextPrimary) },
+                        leadingIcon = {
+                            Icon(
+                                when (option) {
+                                    ServerView.LIST -> Icons.AutoMirrored.Rounded.ViewList
+                                    ServerView.COMPACT -> Icons.Rounded.ViewHeadline
+                                    ServerView.CARDS -> Icons.Rounded.GridView
+                                },
+                                null,
+                            )
+                        },
+                        onClick = {
+                            viewMenu = false
+                            onView(option)
+                        },
                     )
                 }
             }
         }
-
-        LazyColumn(
-            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 24.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            if (sort != ServerSort.SUBSCRIPTIONS) {
-                items(flat, key = { it.first.id }) { (node, subscription, record) ->
-                    ServerRow(
-                        modifier = Modifier.animateItem(),
-                        node = node,
-                        selected = node.id == selectedId,
-                        engine = subscription.effectiveEngine(engine),
-                        ping = pings[node.id],
-                        record = record,
-                        test = nodeTests[node.id],
-                        caption = subscription.name,
-                        onClick = { onSelect(node) },
-                        onLongClick = { shareNode(node) },
+        Box {
+            ToolIcon(Icons.AutoMirrored.Rounded.Sort, "Порядок: ${sort.title}") { sortMenu = true }
+            DropdownMenu(expanded = sortMenu, onDismissRequest = { sortMenu = false }) {
+                ServerSort.entries.forEach { option ->
+                    DropdownMenuItem(
+                        text = { Text(option.title, color = if (option == sort) Palette.VioletSoft else Palette.TextPrimary) },
+                        onClick = {
+                            sortMenu = false
+                            onSort(option)
+                        },
                     )
                 }
-                return@LazyColumn
             }
-            // Подписки аккаунта sub-lab — отдельной выделенной группой сверху,
-            // свои — следом.
-            val fromSubLab = subscriptions.filter { it.source == SubscriptionSource.SUBLAB }
-            val own = subscriptions.filter { it.source != SubscriptionSource.SUBLAB }
-            val grouped = fromSubLab.isNotEmpty()
-            val ordered = fromSubLab + own
-            ordered.forEachIndexed { index, subscription ->
-                if (grouped && index == 0) {
-                    item(key = "group-sublab") {
-                        GroupHeader(
-                            modifier = Modifier.animateItem(),
-                            title = "sub-lab",
-                            subtitle = listOfNotNull(
-                                subLabLabel,
-                                subLabTags.takeIf { it.isNotEmpty() }?.sorted()?.joinToString(" ") { "#$it" },
-                            ).joinToString(" · "),
-                            accent = true,
-                        )
-                    }
-                }
-                if (grouped && index == fromSubLab.size && own.isNotEmpty()) {
-                    item(key = "group-own") {
-                        GroupHeader(modifier = Modifier.animateItem(), title = "Свои подписки", subtitle = "", accent = false)
-                    }
-                }
-                item(key = "header-${subscription.id}") {
-                  Box(Modifier.animateItem()) {
-                    SubscriptionHeader(
-                        subscription, engine, onRefresh, onRename, onDelete, onSetEngine,
-                        onToggleEnabled = onToggleEnabled,
-                        onToggleCollapsed = onToggleCollapsed,
-                        onShare = { sharing = subscription.name to subscription.url },
-                    )
-                  }
-                }
-                if (subscription.collapsed) return@forEachIndexed
-                items(subscription.visibleNodes(engine), key = { it.id }) { node ->
-                    // statsVersion — ключ перечитывания статистики после новой серии пингов.
-                    val record = remember(node.id, statsVersion) { pingRecord(node) }
-                    ServerRow(
-                        modifier = Modifier.animateItem(),
-                        node = node,
-                        selected = node.id == selectedId,
-                        engine = subscription.effectiveEngine(engine),
-                        ping = pings[node.id],
-                        record = record,
-                        test = nodeTests[node.id],
-                        disabled = !subscription.enabled,
-                        onClick = { if (subscription.enabled) onSelect(node) else onToggleEnabled(subscription, true) },
-                        onLongClick = { shareNode(node) },
-                    )
-                }
+        }
+        Spacer(Modifier.width(4.dp))
+        ToolIcon(Icons.Rounded.Add, "Добавить подписку", accent = true, onClick = onAdd)
+    }
+}
+
+/** Кнопка-значок шапки; подпись видна по долгому нажатию. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ToolIcon(icon: ImageVector, label: String, busy: Boolean = false, accent: Boolean = false, onClick: () -> Unit) {
+    TooltipBox(
+        positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
+        tooltip = { PlainTooltip { Text(label) } },
+        state = rememberTooltipState(),
+    ) {
+        Box(
+            Modifier
+                .padding(horizontal = 2.dp)
+                .size(40.dp)
+                .clip(CircleShape)
+                .background(if (accent) Palette.Violet else Palette.Surface)
+                .pressable(enabled = !busy, onClick = onClick),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (busy) {
+                CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = Palette.Cyan)
+            } else {
+                Icon(icon, contentDescription = label, tint = if (accent) Palette.TextPrimary else Palette.VioletSoft, modifier = Modifier.size(20.dp))
             }
         }
     }
@@ -295,63 +453,98 @@ private fun GroupHeader(modifier: Modifier, title: String, subtitle: String, acc
     }
 }
 
-/** Переключатель порядка: по подпискам, по пингу или по доступности. */
+/** Компактная строка: флаг, название и пинг в одну линию. */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun SortRow(sort: ServerSort, onSort: (ServerSort) -> Unit) {
+private fun ServerCompactRow(
+    modifier: Modifier,
+    node: ServerNode,
+    selected: Boolean,
+    supported: Boolean,
+    ping: Int?,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+) {
+    val shape = RoundedCornerShape(12.dp)
+    val background by animateColorAsState(if (selected) Palette.Violet.copy(alpha = 0.18f) else Palette.Surface, tween(250), label = "compactBg")
     Row(
-        Modifier
+        modifier
             .fillMaxWidth()
-            .horizontalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp, vertical = 6.dp),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
+            .clip(shape)
+            .background(background)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+            .graphicsLayer { alpha = if (supported) 1f else 0.5f }
+            .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text("Порядок:", color = Palette.TextMuted, fontSize = 12.sp)
-        ServerSort.entries.forEach { option ->
-            val active = option == sort
-            val background by animateColorAsState(if (active) Palette.Violet.copy(alpha = 0.22f) else Palette.Surface, tween(220), label = "sortBg")
-            val border by animateColorAsState(if (active) Palette.Violet else Palette.Stroke, tween(220), label = "sortBorder")
-            Text(
-                option.title,
-                color = if (active) Palette.TextPrimary else Palette.TextSecondary,
-                fontSize = 12.sp,
-                fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(background)
-                    .border(1.dp, border, RoundedCornerShape(10.dp))
-                    .pressable { onSort(option) }
-                    .padding(horizontal = 10.dp, vertical = 6.dp),
+        FlagBadge(node.flag, size = 24)
+        Spacer(Modifier.width(10.dp))
+        Text(
+            node.title,
+            fontSize = 14.sp,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        PingText(ping)
+        if (selected) {
+            Spacer(Modifier.width(8.dp))
+            Box(
+                Modifier
+                    .size(8.dp)
+                    .clip(CircleShape)
+                    .background(Palette.Violet),
             )
         }
     }
 }
 
+/** Карточка сервера для сетки в два столбца. */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ActionButton(
-    icon: ImageVector,
-    title: String,
-    busy: Boolean = false,
-    accent: Boolean = false,
+private fun ServerCard(
+    modifier: Modifier,
+    node: ServerNode,
+    selected: Boolean,
+    supported: Boolean,
+    ping: Int?,
+    record: PingRecord?,
     onClick: () -> Unit,
+    onLongClick: () -> Unit,
 ) {
-    val shape = RoundedCornerShape(14.dp)
-    Row(
-        Modifier
+    val shape = RoundedCornerShape(18.dp)
+    val border by animateColorAsState(if (selected) Palette.Violet else Palette.Stroke, tween(300), label = "cardBorder")
+    val background by animateColorAsState(if (selected) Palette.SurfaceHigh else Palette.Surface, tween(300), label = "cardBg")
+    Column(
+        modifier
+            .fillMaxWidth()
             .clip(shape)
-            .background(if (accent) Palette.Violet else Palette.Surface)
-            .border(1.dp, if (accent) Palette.Violet else Palette.Stroke, shape)
-            .pressable(enabled = !busy, onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 9.dp),
-        verticalAlignment = Alignment.CenterVertically,
+            .background(background)
+            .border(1.dp, border, shape)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+            .graphicsLayer { alpha = if (supported) 1f else 0.5f }
+            .padding(12.dp),
     ) {
-        if (busy) {
-            CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = Palette.Cyan)
-        } else {
-            Icon(icon, contentDescription = null, tint = if (accent) Palette.TextPrimary else Palette.VioletSoft, modifier = Modifier.size(18.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            FlagBadge(node.flag, size = 32)
+            Spacer(Modifier.weight(1f))
+            PingText(ping)
         }
-        Spacer(Modifier.width(8.dp))
-        Text(title, fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Palette.TextPrimary)
+        Spacer(Modifier.height(10.dp))
+        Text(node.title, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.height(38.dp))
+        Spacer(Modifier.height(6.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Chip(protocolLabel(node.type))
+            Spacer(Modifier.weight(1f))
+            if (record != null && record.checks >= 3) {
+                Text(
+                    "${(record.successRate * 100).toInt()}%",
+                    color = if (record.successRate >= 0.8) Palette.TextMuted else Palette.Amber,
+                    fontSize = 11.sp,
+                )
+            }
+        }
     }
 }
 

@@ -339,6 +339,7 @@ class Repository(private val context: Context) {
             ),
             onboarded = prefs.getBoolean("onboarded", false),
             serverSort = ServerSort.of(prefs.getString("serverSort", null)),
+            serverView = ServerView.of(prefs.getString("serverView", null)),
             advanced = prefs.getBoolean("advanced", false),
             checks = CheckOptions().let { d ->
                 CheckOptions(
@@ -403,6 +404,7 @@ class Repository(private val context: Context) {
             .putBoolean("autoFailover", settings.auto.failover)
             .putBoolean("onboarded", settings.onboarded)
             .putString("serverSort", settings.serverSort.id)
+            .putString("serverView", settings.serverView.id)
             .putBoolean("advanced", settings.advanced)
             .putString("pingMethod", settings.checks.pingMethod.id)
             .putInt("pingTimeoutMs", settings.checks.pingTimeoutMs)
