@@ -12,6 +12,9 @@ sealed interface VpnState {
     data object Idle : VpnState
     data object Connecting : VpnState
     data class Connected(val since: Long, val engine: Engine, val nodeName: String) : VpnState
+
+    /** Сервис включён, но туннель снят: например, телефон в доверенной сети Wi-Fi. */
+    data class Paused(val reason: String) : VpnState
     data object Stopping : VpnState
     data class Failed(val message: String) : VpnState
 }
@@ -25,16 +28,17 @@ object VpnController {
         _state.value = state
     }
 
+    /** Включён ли VPN с точки зрения пользователя — в том числе на паузе. */
     val isActive: Boolean
         get() = when (_state.value) {
-            is VpnState.Connected, VpnState.Connecting -> true
+            is VpnState.Connected, VpnState.Connecting, is VpnState.Paused -> true
             else -> false
         }
 
     /** Запуск; разрешение VpnService.prepare() должно быть уже получено. */
     fun start(context: Context) = send(context, KvnVpnService.ACTION_START)
 
-    /** Перезапуск на текущих настройках: смена ядра или сервера без разрыва TUN. */
+    /** Перезапуск на текущих настройках: смена ядра, сервера или правил. */
     fun restart(context: Context) = send(context, KvnVpnService.ACTION_RESTART)
 
     fun stop(context: Context) = send(context, KvnVpnService.ACTION_STOP)

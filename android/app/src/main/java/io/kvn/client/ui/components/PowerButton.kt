@@ -38,7 +38,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import io.kvn.client.ui.theme.Palette
 
-enum class PowerState { OFF, CONNECTING, ON }
+enum class PowerState { OFF, CONNECTING, ON, PAUSED }
 
 /**
  * Большая круглая кнопка подключения: мягкое свечение, вращающееся кольцо при
@@ -64,12 +64,17 @@ fun PowerButton(state: PowerState, onClick: () -> Unit, modifier: Modifier = Mod
             PowerState.OFF -> 0.18f
             PowerState.CONNECTING -> 0.35f
             PowerState.ON -> 0.55f
+            PowerState.PAUSED -> 0.28f
         },
         animationSpec = tween(600),
         label = "glow",
     )
     val glowColor by animateColorAsState(
-        targetValue = if (state == PowerState.ON) Palette.Green else Palette.Violet,
+        targetValue = when (state) {
+            PowerState.ON -> Palette.Green
+            PowerState.PAUSED -> Palette.Amber
+            else -> Palette.Violet
+        },
         animationSpec = tween(600),
         label = "glowColor",
     )
@@ -83,7 +88,7 @@ fun PowerButton(state: PowerState, onClick: () -> Unit, modifier: Modifier = Mod
         Canvas(
             Modifier
                 .fillMaxSize()
-                .scale(if (state == PowerState.OFF) 1f else breath),
+                .scale(if (state == PowerState.ON || state == PowerState.CONNECTING) breath else 1f),
         ) {
             drawCircle(
                 brush = Brush.radialGradient(
@@ -104,6 +109,8 @@ fun PowerButton(state: PowerState, onClick: () -> Unit, modifier: Modifier = Mod
             drawCircle(color = Palette.Stroke, style = Stroke(stroke), radius = this.size.minDimension / 2 - stroke)
             val brush = if (state == PowerState.ON) {
                 Brush.sweepGradient(listOf(Palette.Green, Palette.Cyan, Palette.Green))
+            } else if (state == PowerState.PAUSED) {
+                Brush.sweepGradient(listOf(Palette.Amber, Palette.Amber.copy(alpha = 0.4f), Palette.Amber))
             } else {
                 Brush.sweepGradient(listOf(Palette.Violet.copy(alpha = 0f), Palette.VioletSoft, Palette.Cyan))
             }
@@ -112,7 +119,7 @@ fun PowerButton(state: PowerState, onClick: () -> Unit, modifier: Modifier = Mod
                 drawArc(
                     brush = brush,
                     startAngle = 0f,
-                    sweepAngle = if (state == PowerState.ON) 360f else 250f,
+                    sweepAngle = if (state == PowerState.CONNECTING) 250f else 360f,
                     useCenter = false,
                     topLeft = Offset(inset, inset),
                     size = androidx.compose.ui.geometry.Size(this.size.width - inset * 2, this.size.height - inset * 2),
@@ -123,7 +130,7 @@ fun PowerButton(state: PowerState, onClick: () -> Unit, modifier: Modifier = Mod
 
         val fill = when (state) {
             PowerState.ON -> Palette.Connected
-            PowerState.CONNECTING -> Brush.linearGradient(listOf(Palette.SurfaceHighest, Palette.SurfaceHigh))
+            PowerState.CONNECTING, PowerState.PAUSED -> Brush.linearGradient(listOf(Palette.SurfaceHighest, Palette.SurfaceHigh))
             PowerState.OFF -> Brush.linearGradient(listOf(Palette.SurfaceHighest, Palette.Surface))
         }
         Box(

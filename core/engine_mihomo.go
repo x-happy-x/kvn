@@ -1,7 +1,10 @@
 package libcore
 
 import (
+	"context"
 	"fmt"
+	"net"
+	"net/netip"
 	"strings"
 	"sync"
 	"time"
@@ -11,6 +14,7 @@ import (
 	"github.com/metacubex/mihomo/listener"
 	LC "github.com/metacubex/mihomo/listener/config"
 	mlog "github.com/metacubex/mihomo/log"
+	"github.com/metacubex/mihomo/tunnel"
 	"github.com/metacubex/mihomo/tunnel/statistic"
 	"golang.org/x/sys/unix"
 	"gopkg.in/yaml.v3"
@@ -176,4 +180,16 @@ func (e *mihomoEngine) Stop() error {
 
 func (e *mihomoEngine) Logs() string {
 	return e.logs.String()
+}
+
+func (e *mihomoEngine) DialProxy(ctx context.Context, host string, port int) (net.Conn, error) {
+	proxy, ok := tunnel.Proxies()[mihomoGroup]
+	if !ok {
+		return nil, fmt.Errorf("в mihomo нет группы %s", mihomoGroup)
+	}
+	metadata := &C.Metadata{NetWork: C.TCP, Type: C.INNER, Host: host, DstPort: uint16(port)}
+	if ip, err := netip.ParseAddr(host); err == nil {
+		metadata.Host, metadata.DstIP = "", ip
+	}
+	return proxy.DialContext(ctx, metadata)
 }

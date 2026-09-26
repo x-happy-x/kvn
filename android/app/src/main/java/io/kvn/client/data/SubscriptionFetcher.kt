@@ -13,10 +13,11 @@ data class FetchedSubscription(
     val download: Long,
     val total: Long,
     val expire: Long,
+    val announce: String?,
 )
 
 object SubscriptionFetcher {
-    fun fetch(url: String, userAgent: String): FetchedSubscription {
+    fun fetch(url: String, headers: Map<String, String>): FetchedSubscription {
         var target = URL(url)
         // HttpURLConnection не переходит между http и https сам — делаем это вручную.
         repeat(5) {
@@ -24,8 +25,7 @@ object SubscriptionFetcher {
                 connectTimeout = 15_000
                 readTimeout = 20_000
                 instanceFollowRedirects = false
-                setRequestProperty("User-Agent", userAgent)
-                setRequestProperty("Accept", "*/*")
+                headers.forEach { (name, value) -> setRequestProperty(name, value) }
             }
             try {
                 val code = connection.responseCode
@@ -42,12 +42,13 @@ object SubscriptionFetcher {
                 val info = parseUserInfo(connection.getHeaderField("subscription-userinfo"))
                 return FetchedSubscription(
                     body = body,
-                    title = decodeTitle(connection.getHeaderField("profile-title"))
+                    title = decodeHeader(connection.getHeaderField("profile-title"))
                         ?: fileName(connection.getHeaderField("content-disposition")),
                     upload = info["upload"] ?: 0,
                     download = info["download"] ?: 0,
                     total = info["total"] ?: 0,
                     expire = info["expire"] ?: 0,
+                    announce = decodeHeader(connection.getHeaderField("announce")),
                 )
             } finally {
                 connection.disconnect()
@@ -67,7 +68,8 @@ object SubscriptionFetcher {
         }.toMap()
     }
 
-    private fun decodeTitle(header: String?): String? {
+    /** Заголовки Happ-панелей бывают в виде `base64:...`. */
+    fun decodeHeader(header: String?): String? {
         if (header.isNullOrBlank()) return null
         if (header.startsWith("base64:")) {
             return runCatching {

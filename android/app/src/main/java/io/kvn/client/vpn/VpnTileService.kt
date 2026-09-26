@@ -52,13 +52,14 @@ class VpnTileService : TileService() {
     private fun render(state: VpnState) {
         val tile = qsTile ?: return
         tile.state = when (state) {
-            is VpnState.Connected, VpnState.Connecting -> Tile.STATE_ACTIVE
+            is VpnState.Connected, VpnState.Connecting, is VpnState.Paused -> Tile.STATE_ACTIVE
             else -> Tile.STATE_INACTIVE
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             tile.subtitle = when (state) {
                 is VpnState.Connected -> state.engine.title
                 VpnState.Connecting -> "Подключение…"
+                is VpnState.Paused -> "Пауза"
                 else -> null
             }
         }

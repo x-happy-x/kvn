@@ -10,8 +10,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -21,7 +21,10 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.rounded.Logout
 import androidx.compose.material.icons.automirrored.rounded.Notes
+import androidx.compose.material.icons.rounded.AccountCircle
+import androidx.compose.material.icons.rounded.Apps
 import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.Dns
 import androidx.compose.material.icons.rounded.Flag
@@ -29,8 +32,11 @@ import androidx.compose.material.icons.rounded.Lan
 import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.Memory
 import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.rounded.Sync
 import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material.icons.rounded.Wifi
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
@@ -53,18 +59,29 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.kvn.client.core.Engine
+import io.kvn.client.data.AppMode
 import io.kvn.client.data.AppSettings
+import io.kvn.client.data.Mimicry
+import io.kvn.client.data.WifiMode
 import io.kvn.client.ui.components.EngineSwitch
 import io.kvn.client.ui.components.Panel
 import io.kvn.client.ui.components.SectionTitle
 import io.kvn.client.ui.theme.Palette
+import java.text.DateFormat
+import java.util.Date
 
 @Composable
 fun SettingsScreen(
     settings: AppSettings,
     versions: String,
+    accountBusy: Boolean,
     onEngine: (Engine) -> Unit,
     onUpdate: (restart: Boolean, transform: (AppSettings) -> AppSettings) -> Unit,
+    onLogin: () -> Unit,
+    onSync: () -> Unit,
+    onLogout: () -> Unit,
+    onOpenApps: () -> Unit,
+    onOpenWifi: () -> Unit,
     loadLogs: suspend () -> String,
     loadConfig: suspend () -> String,
 ) {
@@ -96,6 +113,12 @@ fun SettingsScreen(
                 color = Palette.TextSecondary,
                 fontSize = 13.sp,
             )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "Подписка запрашивается как ${Mimicry.clientName(settings.engine)}: при смене ядра она скачивается заново со своими заголовками.",
+                color = Palette.TextMuted,
+                fontSize = 12.sp,
+            )
             if (versions.isNotEmpty()) {
                 Spacer(Modifier.height(8.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -106,8 +129,15 @@ fun SettingsScreen(
             }
         }
 
+        SectionTitle("Аккаунт sub-lab")
+        AccountPanel(settings, accountBusy, onLogin, onSync, onLogout)
+
         SectionTitle("Маршрутизация")
         Panel(Modifier.fillMaxWidth()) {
+            ValueRow(Icons.Rounded.Apps, "Приложения через VPN", appsSummary(settings), onOpenApps)
+            Divider()
+            ValueRow(Icons.Rounded.Wifi, "Пауза в Wi-Fi", wifiSummary(settings), onOpenWifi)
+            Divider()
             ToggleRow(Icons.Rounded.Lan, "Локальная сеть напрямую", "Роутер, принтер, NAS — мимо VPN", settings.bypassLan) { value ->
                 onUpdate(true) { it.copy(bypassLan = value) }
             }
@@ -125,7 +155,9 @@ fun SettingsScreen(
         Panel(Modifier.fillMaxWidth()) {
             ValueRow(Icons.Rounded.Dns, "DNS", settings.dns) { editing = EditField.DNS }
             Divider()
-            ValueRow(Icons.Rounded.Person, "User-Agent подписки", settings.userAgent) { editing = EditField.USER_AGENT }
+            ValueRow(Icons.Rounded.Person, "User-Agent для Xray", Mimicry.userAgent(Engine.XRAY, settings)) { editing = EditField.UA_XRAY }
+            Divider()
+            ValueRow(Icons.Rounded.Person, "User-Agent для Mihomo", Mimicry.userAgent(Engine.MIHOMO, settings)) { editing = EditField.UA_MIHOMO }
             Divider()
             ValueRow(Icons.Rounded.Tune, "Уровень журнала", settings.logLevel) { editing = EditField.LOG_LEVEL }
         }
@@ -152,7 +184,8 @@ fun SettingsScreen(
             editing = null
             when (field) {
                 EditField.DNS -> onUpdate(true) { it.copy(dns = value) }
-                EditField.USER_AGENT -> onUpdate(false) { it.copy(userAgent = value) }
+                EditField.UA_XRAY -> onUpdate(false) { it.copy(userAgentXray = value) }
+                EditField.UA_MIHOMO -> onUpdate(false) { it.copy(userAgentMihomo = value) }
                 EditField.LOG_LEVEL -> onUpdate(true) { it.copy(logLevel = value) }
             }
         }
@@ -163,19 +196,74 @@ fun SettingsScreen(
     }
 }
 
+private fun appsSummary(settings: AppSettings): String = when (settings.appMode) {
+    AppMode.ALL -> AppMode.ALL.title
+    AppMode.ONLY -> "Только выбранные: ${settings.apps.size}"
+    AppMode.EXCEPT -> "Кроме выбранных: ${settings.apps.size}"
+}
+
+private fun wifiSummary(settings: AppSettings): String = when (settings.wifiMode) {
+    WifiMode.OFF -> WifiMode.OFF.title
+    WifiMode.ANY -> "В любой сети Wi-Fi"
+    WifiMode.LIST -> if (settings.wifiNetworks.isEmpty()) "Сети не выбраны" else settings.wifiNetworks.sorted().joinToString(", ")
+}
+
+@Composable
+private fun AccountPanel(
+    settings: AppSettings,
+    busy: Boolean,
+    onLogin: () -> Unit,
+    onSync: () -> Unit,
+    onLogout: () -> Unit,
+) {
+    val account = settings.account
+    Panel(Modifier.fillMaxWidth()) {
+        if (!account.loggedIn) {
+            ValueRow(
+                Icons.Rounded.AccountCircle,
+                "Войти в sub-lab",
+                if (account.server.isNotEmpty()) "Сессия закончилась — войдите заново" else "Подписки из вашего аккаунта появятся сами",
+                onLogin,
+            )
+            return@Panel
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 6.dp)) {
+            RowIcon(Icons.Rounded.AccountCircle)
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(account.name.ifEmpty { account.username }, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                Text(account.server.removePrefix("https://"), color = Palette.TextSecondary, fontSize = 12.sp, maxLines = 1)
+                if (account.syncedAt > 0) {
+                    Text(
+                        "Синхронизировано " + DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(account.syncedAt)),
+                        color = Palette.TextMuted,
+                        fontSize = 11.sp,
+                    )
+                }
+            }
+            if (busy) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = Palette.VioletSoft)
+        }
+        Divider()
+        ValueRow(Icons.Rounded.Sync, "Обновить список подписок", "", onSync)
+        Divider()
+        ValueRow(Icons.AutoMirrored.Rounded.Logout, "Выйти", "Подписки из sub-lab уберутся из приложения", onLogout)
+    }
+}
+
 private enum class EditField(val title: String, val hint: String) {
     DNS("DNS-сервер", "1.1.1.1, 8.8.8.8 или https://1.1.1.1/dns-query"),
-    USER_AGENT("User-Agent", "С каким клиентом представляться серверу подписки"),
+    UA_XRAY("User-Agent для Xray", "Пусто — как Happ (${Mimicry.HAPP_USER_AGENT})"),
+    UA_MIHOMO("User-Agent для Mihomo", "Пусто — как FlClashX (${Mimicry.FLCLASHX_USER_AGENT})"),
     LOG_LEVEL("Уровень журнала", "debug, info, warning или error"),
 }
 
 private class TextDialog(val title: String, val load: suspend () -> String)
 
 @Composable
-private fun Divider() = HorizontalDivider(color = Palette.Stroke, modifier = Modifier.padding(vertical = 4.dp))
+internal fun Divider() = HorizontalDivider(color = Palette.Stroke, modifier = Modifier.padding(vertical = 4.dp))
 
 @Composable
-private fun RowIcon(icon: ImageVector) {
+internal fun RowIcon(icon: ImageVector) {
     Box(
         Modifier
             .size(34.dp)
@@ -188,7 +276,7 @@ private fun RowIcon(icon: ImageVector) {
 }
 
 @Composable
-private fun ToggleRow(icon: ImageVector, title: String, subtitle: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+internal fun ToggleRow(icon: ImageVector, title: String, subtitle: String, checked: Boolean, onChange: (Boolean) -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
@@ -217,7 +305,7 @@ private fun ToggleRow(icon: ImageVector, title: String, subtitle: String, checke
 }
 
 @Composable
-private fun ValueRow(icon: ImageVector, title: String, value: String, onClick: () -> Unit) {
+internal fun ValueRow(icon: ImageVector, title: String, value: String, onClick: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
@@ -239,9 +327,11 @@ private fun ValueRow(icon: ImageVector, title: String, value: String, onClick: (
 private fun EditDialog(field: EditField, settings: AppSettings, onDismiss: () -> Unit, onSave: (String) -> Unit) {
     val initial = when (field) {
         EditField.DNS -> settings.dns
-        EditField.USER_AGENT -> settings.userAgent
+        EditField.UA_XRAY -> settings.userAgentXray
+        EditField.UA_MIHOMO -> settings.userAgentMihomo
         EditField.LOG_LEVEL -> settings.logLevel
     }
+    val allowEmpty = field == EditField.UA_XRAY || field == EditField.UA_MIHOMO
     var value by remember { mutableStateOf(initial) }
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -262,13 +352,13 @@ private fun EditDialog(field: EditField, settings: AppSettings, onDismiss: () ->
                 } else {
                     OutlinedTextField(value = value, onValueChange = { value = it }, singleLine = true)
                 }
-                if (field == EditField.USER_AGENT) {
-                    TextButton(onClick = { value = AppSettings.DEFAULT_USER_AGENT }) { Text("По умолчанию") }
+                if (allowEmpty) {
+                    TextButton(onClick = { value = "" }) { Text("По умолчанию") }
                 }
             }
         },
         confirmButton = {
-            TextButton(onClick = { if (value.isNotBlank()) onSave(value.trim()) }) { Text("Сохранить") }
+            TextButton(onClick = { if (allowEmpty || value.isNotBlank()) onSave(value.trim()) }) { Text("Сохранить") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Отмена") } },
     )

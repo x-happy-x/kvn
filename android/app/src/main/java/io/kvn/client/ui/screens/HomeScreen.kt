@@ -5,6 +5,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,6 +25,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.ArrowDownward
 import androidx.compose.material.icons.rounded.ArrowUpward
+import androidx.compose.material.icons.rounded.Memory
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
@@ -47,7 +49,6 @@ import io.kvn.client.core.Engine
 import io.kvn.client.data.ServerNode
 import io.kvn.client.data.Subscription
 import io.kvn.client.ui.Traffic
-import io.kvn.client.ui.components.EngineSwitch
 import io.kvn.client.ui.components.FlagBadge
 import io.kvn.client.ui.components.Panel
 import io.kvn.client.ui.components.PingText
@@ -71,13 +72,14 @@ fun HomeScreen(
     subscription: Subscription?,
     traffic: Traffic,
     onToggle: () -> Unit,
-    onEngine: (Engine) -> Unit,
+    onOpenSettings: () -> Unit,
     onOpenServers: () -> Unit,
     onAddSubscription: () -> Unit,
 ) {
     val power = when (state) {
         is VpnState.Connected -> PowerState.ON
         VpnState.Connecting, VpnState.Stopping -> PowerState.CONNECTING
+        is VpnState.Paused -> PowerState.PAUSED
         else -> PowerState.OFF
     }
 
@@ -88,10 +90,8 @@ fun HomeScreen(
             .padding(horizontal = 20.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Header(power)
-        Spacer(Modifier.height(18.dp))
-        EngineSwitch(selected = engine, onSelect = onEngine, modifier = Modifier.fillMaxWidth())
-        Spacer(Modifier.height(12.dp))
+        Header(power, engine, onOpenSettings)
+        Spacer(Modifier.height(20.dp))
 
         PowerButton(state = power, onClick = onToggle)
 
@@ -105,7 +105,7 @@ fun HomeScreen(
         } else {
             EmptyPanel(onAddSubscription)
         }
-        if (subscription != null && (subscription.total > 0 || subscription.expire > 0)) {
+        if (subscription != null && (subscription.total > 0 || subscription.expire > 0 || subscription.announce.isNotEmpty())) {
             Spacer(Modifier.height(12.dp))
             SubscriptionPanel(subscription)
         }
@@ -113,8 +113,9 @@ fun HomeScreen(
     }
 }
 
+/** Шапка: название и текущее ядро (переключается в настройках). */
 @Composable
-private fun Header(power: PowerState) {
+private fun Header(power: PowerState, engine: Engine, onOpenSettings: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -128,7 +129,19 @@ private fun Header(power: PowerState) {
                 .background(if (power == PowerState.ON) Palette.Connected else Palette.Accent),
         )
         Spacer(Modifier.width(10.dp))
-        Text("KVN", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = Palette.TextPrimary)
+        Text("KVN", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = Palette.TextPrimary, modifier = Modifier.weight(1f))
+        Row(
+            modifier = Modifier
+                .clip(RoundedCornerShape(12.dp))
+                .background(Palette.Surface)
+                .clickable(onClick = onOpenSettings)
+                .padding(horizontal = 12.dp, vertical = 7.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.Rounded.Memory, contentDescription = null, tint = Palette.VioletSoft, modifier = Modifier.size(15.dp))
+            Spacer(Modifier.width(6.dp))
+            Text(engine.title, color = Palette.TextSecondary, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+        }
     }
 }
 
@@ -147,12 +160,14 @@ private fun StatusBlock(state: VpnState) {
         is VpnState.Connected -> "Подключено"
         VpnState.Connecting -> "Подключение…"
         VpnState.Stopping -> "Отключение…"
+        is VpnState.Paused -> "На паузе"
         is VpnState.Failed -> "Ошибка подключения"
         VpnState.Idle -> "Не подключено"
     }
     val subtitle = when (state) {
         is VpnState.Connected -> formatDuration(now - state.since)
         is VpnState.Failed -> state.message
+        is VpnState.Paused -> "${state.reason} — трафик идёт напрямую"
         VpnState.Idle -> "Нажмите, чтобы подключиться"
         else -> " "
     }
@@ -163,6 +178,7 @@ private fun StatusBlock(state: VpnState) {
             fontWeight = FontWeight.SemiBold,
             color = when (state) {
                 is VpnState.Connected -> Palette.Green
+                is VpnState.Paused -> Palette.Amber
                 is VpnState.Failed -> Palette.Red
                 else -> Palette.TextPrimary
             },
@@ -288,6 +304,10 @@ private fun SubscriptionPanel(subscription: Subscription) {
             expireLabel(subscription.expire)?.let {
                 Text(it, color = if (it == "истекла") Palette.Red else Palette.TextSecondary, fontSize = 12.sp)
             }
+        }
+        if (subscription.announce.isNotEmpty()) {
+            Spacer(Modifier.height(8.dp))
+            Text(subscription.announce, color = Palette.TextSecondary, fontSize = 12.sp)
         }
         if (subscription.total > 0) {
             Spacer(Modifier.height(10.dp))

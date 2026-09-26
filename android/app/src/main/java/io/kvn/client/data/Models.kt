@@ -25,7 +25,7 @@ data class ServerNode(
     val flag: String? get() = leadingFlag(name)
 
     /** Название без флага в начале. */
-    val title: String get() = flag?.let { name.removePrefix(it).trim() }?.ifEmpty { name } ?: name
+    val title: String get() = flag?.let { name.trimStart().removePrefix(it).trim() }?.ifEmpty { name } ?: name
 
     companion object {
         fun fromLibcore(subscriptionId: String, item: JSONObject): ServerNode {
@@ -43,10 +43,29 @@ data class ServerNode(
             )
         }
 
-        fun listFromLibcore(subscriptionId: String, json: String): List<ServerNode> {
-            val array = JSONArray(json)
+        fun listFromLibcore(subscriptionId: String, json: String): List<ServerNode> =
+            listFromJson(subscriptionId, JSONArray(json))
+
+        fun listFromJson(subscriptionId: String, array: JSONArray?): List<ServerNode> {
+            if (array == null) return emptyList()
             return List(array.length()) { fromLibcore(subscriptionId, array.getJSONObject(it)) }
         }
+    }
+}
+
+/** Откуда взялась подписка. */
+enum class SubscriptionSource(val id: String) {
+    /** Ссылка, добавленная вручную. */
+    URL("url"),
+
+    /** Серверы, вставленные текстом: одни и те же для обоих ядер. */
+    MANUAL("manual"),
+
+    /** Подписка из аккаунта sub-lab; синхронизируется вместе с ним. */
+    SUBLAB("sublab");
+
+    companion object {
+        fun of(id: String?): SubscriptionSource = entries.firstOrNull { it.id == id } ?: URL
     }
 }
 
@@ -55,48 +74,118 @@ data class Subscription(
     val name: String,
     /** Ссылка подписки или пусто, если серверы вставлены вручную. */
     val url: String,
+    val source: SubscriptionSource = if (url.isEmpty()) SubscriptionSource.MANUAL else SubscriptionSource.URL,
+    /** Короткая ссылка sub-lab, по которой подписка сопоставляется при синхронизации. */
+    val shortId: String = "",
     val updatedAt: Long = 0,
     val upload: Long = 0,
     val download: Long = 0,
     val total: Long = 0,
     /** Окончание подписки, секунды Unix; 0 — бессрочно. */
     val expire: Long = 0,
-    val nodes: List<ServerNode> = emptyList(),
+    /** Объявление панели (заголовок `announce`). */
+    val announce: String = "",
+    /**
+     * Серверы для каждого ядра. Xray получает подписку как Happ, Mihomo — как
+     * FlClashX, поэтому панель может отдать им разные списки.
+     */
+    val nodesXray: List<ServerNode> = emptyList(),
+    val nodesMihomo: List<ServerNode> = emptyList(),
     val error: String? = null,
 ) {
     val used: Long get() = upload + download
+
+    val remote: Boolean get() = url.isNotEmpty()
+
+    fun nodesFor(engine: Engine): List<ServerNode> = when (engine) {
+        Engine.XRAY -> nodesXray
+        Engine.MIHOMO -> nodesMihomo
+    }
+
+    fun withNodes(engine: Engine, nodes: List<ServerNode>): Subscription = when (engine) {
+        Engine.XRAY -> copy(nodesXray = nodes)
+        Engine.MIHOMO -> copy(nodesMihomo = nodes)
+    }
 
     fun toJson(): JSONObject = JSONObject().apply {
         put("id", id)
         put("name", name)
         put("url", url)
+        put("source", source.id)
+        put("shortId", shortId)
         put("updatedAt", updatedAt)
         put("upload", upload)
         put("download", download)
         put("total", total)
         put("expire", expire)
+        put("announce", announce)
         error?.let { put("error", it) }
-        put("nodes", JSONArray().apply { nodes.forEach { put(JSONObject(it.json)) } })
+        put("nodesXray", JSONArray().apply { nodesXray.forEach { put(JSONObject(it.json)) } })
+        put("nodesMihomo", JSONArray().apply { nodesMihomo.forEach { put(JSONObject(it.json)) } })
     }
 
     companion object {
         fun fromJson(json: JSONObject): Subscription {
             val id = json.getString("id")
-            val nodes = json.optJSONArray("nodes") ?: JSONArray()
+            // До разделения по ядрам серверы лежали одним списком `nodes`.
+            val legacy = ServerNode.listFromJson(id, json.optJSONArray("nodes"))
+            val url = json.optString("url")
+            val source = when {
+                json.has("source") -> SubscriptionSource.of(json.optString("source"))
+                url.isEmpty() -> SubscriptionSource.MANUAL
+                else -> SubscriptionSource.URL
+            }
             return Subscription(
                 id = id,
                 name = json.optString("name"),
-                url = json.optString("url"),
+                url = url,
+                source = source,
+                shortId = json.optString("shortId"),
                 updatedAt = json.optLong("updatedAt"),
                 upload = json.optLong("upload"),
                 download = json.optLong("download"),
                 total = json.optLong("total"),
                 expire = json.optLong("expire"),
-                nodes = List(nodes.length()) { ServerNode.fromLibcore(id, nodes.getJSONObject(it)) },
+                announce = json.optString("announce"),
+                nodesXray = json.optJSONArray("nodesXray")?.let { ServerNode.listFromJson(id, it) } ?: legacy,
+                nodesMihomo = json.optJSONArray("nodesMihomo")?.let { ServerNode.listFromJson(id, it) } ?: legacy,
                 error = json.optString("error").ifEmpty { null },
             )
         }
     }
+}
+
+/** Какие приложения идут через VPN. */
+enum class AppMode(val id: String, val title: String) {
+    ALL("all", "Все приложения"),
+    ONLY("only", "Только выбранные"),
+    EXCEPT("except", "Все, кроме выбранных");
+
+    companion object {
+        fun of(id: String?): AppMode = entries.firstOrNull { it.id == id } ?: ALL
+    }
+}
+
+/** Когда VPN сам встаёт на паузу. */
+enum class WifiMode(val id: String, val title: String) {
+    OFF("off", "Не отключать"),
+    ANY("any", "В любой сети Wi-Fi"),
+    LIST("list", "В выбранных сетях Wi-Fi");
+
+    companion object {
+        fun of(id: String?): WifiMode = entries.firstOrNull { it.id == id } ?: OFF
+    }
+}
+
+/** Сессия аккаунта sub-lab: хранится только токен, пароль не сохраняется. */
+data class SubLabAccount(
+    val server: String = "",
+    val token: String = "",
+    val username: String = "",
+    val name: String = "",
+    val syncedAt: Long = 0,
+) {
+    val loggedIn: Boolean get() = server.isNotEmpty() && token.isNotEmpty()
 }
 
 data class AppSettings(
@@ -106,8 +195,15 @@ data class AppSettings(
     val bypassLan: Boolean = true,
     val directRu: Boolean = false,
     val ipv6: Boolean = false,
-    val userAgent: String = DEFAULT_USER_AGENT,
+    /** Свой User-Agent для запросов подписки; пусто — мимикрия под Happ / FlClashX. */
+    val userAgentXray: String = "",
+    val userAgentMihomo: String = "",
     val logLevel: String = "warning",
+    val appMode: AppMode = AppMode.ALL,
+    val apps: Set<String> = emptySet(),
+    val wifiMode: WifiMode = WifiMode.OFF,
+    val wifiNetworks: Set<String> = emptySet(),
+    val account: SubLabAccount = SubLabAccount(),
 ) {
     /** Настройки в формате libcore Options. */
     fun coreOptions(mtu: Int): String = JSONObject().apply {
@@ -119,9 +215,9 @@ data class AppSettings(
         put("logLevel", logLevel)
     }.toString()
 
-    companion object {
-        /** С этим UA панели отдают обычный список ссылок, который понимают оба ядра. */
-        const val DEFAULT_USER_AGENT = "v2rayNG/1.10.5"
+    fun customUserAgent(engine: Engine): String = when (engine) {
+        Engine.XRAY -> userAgentXray
+        Engine.MIHOMO -> userAgentMihomo
     }
 }
 

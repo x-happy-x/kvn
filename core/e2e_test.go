@@ -16,6 +16,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -77,7 +78,7 @@ func openTestTun(t *testing.T) int {
 	return fd
 }
 
-func startUpstream(t *testing.T, httpAddr string, ssPort, vlessPort int) {
+func startUpstream(t *testing.T, httpAddr, tlsAddr string, ssPort, vlessPort int) {
 	t.Helper()
 	config := fmt.Sprintf(`{
   "log": {"loglevel": "warning"},
@@ -87,8 +88,12 @@ func startUpstream(t *testing.T, httpAddr string, ssPort, vlessPort int) {
     {"listen": "127.0.0.1", "port": %d, "protocol": "vless",
      "settings": {"clients": [{"id": %q}], "decryption": "none"}}
   ],
-  "outbounds": [{"protocol": "freedom", "settings": {"redirect": %q}}]
-}`, ssPort, vlessPort, e2eUUID, httpAddr)
+  "outbounds": [
+    {"tag": "plain", "protocol": "freedom", "settings": {"redirect": %q}},
+    {"tag": "tls", "protocol": "freedom", "settings": {"redirect": %q}}
+  ],
+  "routing": {"rules": [{"type": "field", "port": "443", "outboundTag": "tls"}]}
+}`, ssPort, vlessPort, e2eUUID, httpAddr, tlsAddr)
 	instance, err := core.StartInstance("json", []byte(config))
 	if err != nil {
 		t.Fatalf("upstream: %v", err)
@@ -110,8 +115,14 @@ func TestEndToEnd(t *testing.T) {
 	}))
 	defer httpListener.Close()
 
+	// Сюда приходят проверки Scan: всё, что идёт на :443, upstream отдаёт HTTPS-серверу.
+	tlsServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, strings.Repeat("s", 70<<10))
+	}))
+	defer tlsServer.Close()
+
 	ssPort, vlessPort := freePort(t), freePort(t)
-	startUpstream(t, httpListener.Addr().String(), ssPort, vlessPort)
+	startUpstream(t, httpListener.Addr().String(), tlsServer.Listener.Addr().String(), ssPort, vlessPort)
 	fd := openTestTun(t)
 
 	ssUserInfo := base64.RawURLEncoding.EncodeToString([]byte("aes-128-gcm:e2e-pass"))
@@ -159,6 +170,9 @@ func TestEndToEnd(t *testing.T) {
 			if strings.TrimSpace(body) != "pong" {
 				t.Fatalf("%s: неожиданный ответ %q", label, body)
 			}
+			if index == 0 {
+				scanThroughEngine(t, label)
+			}
 			t.Logf("%s: ok", label)
 		}
 	}
@@ -173,5 +187,32 @@ func TestEndToEnd(t *testing.T) {
 	if response, err := client.Get("http://" + e2eTarget + ":8080/"); err == nil {
 		response.Body.Close()
 		t.Fatal("после Stop трафик всё ещё проходит через туннель")
+	}
+}
+
+// scanThroughEngine проверяет прокси-путь Scan через запущенное ядро: имя
+// kvn.test существует только «за прокси», поэтому напрямую оно не резолвится,
+// а через VPN сайт открывается.
+func scanThroughEngine(t *testing.T, label string) {
+	t.Helper()
+	payload, err := Scan("kvn.test")
+	if err != nil {
+		t.Fatalf("%s: Scan: %v", label, err)
+	}
+	var res analysis
+	if err := json.Unmarshal([]byte(payload), &res); err != nil {
+		t.Fatal(err)
+	}
+	var proxy *probePath
+	for i := range res.Paths {
+		if res.Paths[i].ID == "proxy" {
+			proxy = &res.Paths[i]
+		}
+	}
+	if proxy == nil || proxy.Verdict != "ok" {
+		t.Fatalf("%s: прокси-путь Scan: %+v", label, res.Paths)
+	}
+	if res.Verdict != "bypassed" {
+		t.Fatalf("%s: verdict %s (%s)", label, res.Verdict, res.Summary)
 	}
 }

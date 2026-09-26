@@ -1,14 +1,18 @@
 package libcore
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
 
+	xnet "github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/common/platform"
+	"github.com/xtls/xray-core/common/session"
 	"github.com/xtls/xray-core/core"
 	_ "github.com/xtls/xray-core/main/distro/all"
 	"golang.org/x/sys/unix"
@@ -145,4 +149,9 @@ func (e *xrayEngine) Logs() string {
 		return ""
 	}
 	return tailFile(e.logPath, 64*1024)
+}
+
+func (e *xrayEngine) DialProxy(ctx context.Context, host string, port int) (net.Conn, error) {
+	ctx = session.SetForcedOutboundTagToContext(ctx, xrayProxyTag)
+	return core.Dial(ctx, e.instance, xnet.TCPDestination(xnet.ParseAddress(host), xnet.Port(port)))
 }

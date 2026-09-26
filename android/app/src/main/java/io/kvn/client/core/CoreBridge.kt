@@ -37,6 +37,12 @@ object CoreBridge {
 
     fun logs(): String = Libcore.logs()
 
+    /** Готовые наборы целей для проверки доступности (JSON). */
+    fun scanPresets(): String = Libcore.scanPresets()
+
+    /** Проверка одной цели напрямую и через VPN; блокирует поток на 5–30 с. */
+    fun scan(target: String): String = Libcore.scan(target)
+
     fun xrayVersion(): String = Libcore.xrayVersion()
 
     fun mihomoVersion(): String = Libcore.mihomoVersion()

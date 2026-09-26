@@ -12,23 +12,34 @@ import android.os.ParcelFileDescriptor
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
+import io.kvn.client.KvnApp
 import io.kvn.client.MainActivity
 import io.kvn.client.R
-import io.kvn.client.KvnApp
 import io.kvn.client.core.CoreBridge
+import io.kvn.client.data.AppMode
+import io.kvn.client.data.AppSettings
+import io.kvn.client.data.WifiMode
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * VPN-сервис: открывает TUN и отдаёт его дескриптор выбранному ядру.
  *
- * Трафик самого приложения исключён из туннеля (addDisallowedApplication), поэтому
- * соединения ядер с серверами идут напрямую и не зацикливаются.
+ * Трафик самого приложения исключён из туннеля, поэтому соединения ядер с
+ * серверами идут напрямую и не зацикливаются. В доверенной сети Wi-Fi сервис
+ * остаётся включённым, но снимает туннель (состояние Paused) и поднимает его
+ * снова, когда телефон уходит из этой сети.
  */
 class KvnVpnService : VpnService() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -38,6 +49,12 @@ class KvnVpnService : VpnService() {
     /** Параметры, с которыми открыт текущий TUN: при их смене его надо пересоздать. */
     private var tunKey: String? = null
 
+    /** Пользователь хочет, чтобы VPN работал (в том числе на паузе). */
+    private var enabled = false
+
+    private var wifi: WifiMonitor? = null
+    private var wifiJob: Job? = null
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
@@ -46,15 +63,68 @@ class KvnVpnService : VpnService() {
             }
             ACTION_RESTART -> {
                 promoteToForeground(getString(R.string.app_name))
-                scope.launch { lock.withLock { connect(reuseTun = true) } }
+                scope.launch { lock.withLock { apply(reuseTun = true) } }
             }
             else -> {
                 // Запуск из системы («постоянная VPN») приходит без action.
                 promoteToForeground(getString(R.string.app_name))
-                scope.launch { lock.withLock { connect(reuseTun = false) } }
+                scope.launch { lock.withLock { apply(reuseTun = false) } }
             }
         }
         return START_STICKY
+    }
+
+    /** Поднимает туннель или ставит его на паузу — смотря где сейчас телефон. */
+    private suspend fun apply(reuseTun: Boolean) {
+        enabled = true
+        val settings = KvnApp.instance.repository.settings.value
+        val monitor = syncWifiMonitor(settings)
+        val reason = monitor?.let { WifiMonitor.pauseReason(it.state.value, settings) }
+        if (reason != null) pause(reason) else connect(reuseTun)
+    }
+
+    @OptIn(FlowPreview::class)
+    private suspend fun syncWifiMonitor(settings: AppSettings): WifiMonitor? {
+        if (settings.wifiMode == WifiMode.OFF) {
+            stopWifiMonitor()
+            return null
+        }
+        wifi?.let { return it }
+        val monitor = WifiMonitor(this).also { it.start() }
+        wifi = monitor
+        // Первое событие приходит асинхронно; без ожидания VPN успел бы подняться
+        // в доверенной сети и тут же встать на паузу.
+        withTimeoutOrNull(1_500) { monitor.state.first { it.connected } }
+        wifiJob = scope.launch {
+            monitor.state.drop(1).debounce(2_000).collect {
+                lock.withLock { if (enabled) onWifiChanged() }
+            }
+        }
+        return monitor
+    }
+
+    private fun stopWifiMonitor() {
+        wifiJob?.cancel()
+        wifiJob = null
+        wifi?.stop()
+        wifi = null
+    }
+
+    private fun onWifiChanged() {
+        val monitor = wifi ?: return
+        val settings = KvnApp.instance.repository.settings.value
+        val reason = WifiMonitor.pauseReason(monitor.state.value, settings)
+        val paused = VpnController.state.value is VpnState.Paused
+        when {
+            reason != null -> pause(reason)
+            paused -> connect(reuseTun = false)
+        }
+    }
+
+    private fun pause(reason: String) {
+        releaseTun()
+        VpnController.update(VpnState.Paused(reason))
+        promoteToForeground("Пауза: $reason")
     }
 
     private fun connect(reuseTun: Boolean) {
@@ -72,14 +142,14 @@ class KvnVpnService : VpnService() {
 
         VpnController.update(VpnState.Connecting)
         try {
-            val key = "${settings.ipv6}|${settings.dns}"
+            val key = listOf(settings.ipv6, settings.dns, settings.appMode.id, settings.apps.sorted()).joinToString("|")
             val current = tun
             val descriptor = if (reuseTun && current != null && tunKey == key) {
                 current
             } else {
                 // Старое ядро держит копию fd, поэтому сначала останавливаем его.
                 releaseTun()
-                openTun(settings.ipv6, settings.dns).also {
+                openTun(settings).also {
                     tun = it
                     tunKey = key
                 }
@@ -93,22 +163,43 @@ class KvnVpnService : VpnService() {
         }
     }
 
-    private fun openTun(ipv6: Boolean, dns: String): ParcelFileDescriptor {
+    private fun openTun(settings: AppSettings): ParcelFileDescriptor {
         val builder = Builder()
             .setSession(getString(R.string.app_name))
             .setMtu(MTU)
             .addAddress(TUN_ADDRESS, 30)
             .addRoute("0.0.0.0", 0)
-            .addDnsServer(tunDns(dns))
-            .addDisallowedApplication(packageName)
+            .addDnsServer(tunDns(settings.dns))
             .setConfigureIntent(openAppIntent())
-        if (ipv6) {
+        applyAppMode(builder, settings)
+        if (settings.ipv6) {
             builder.addAddress(TUN_ADDRESS6, 126).addRoute("::", 0)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             builder.setMetered(false)
         }
         return builder.establish() ?: throw IllegalStateException("Нет разрешения на VPN")
+    }
+
+    /**
+     * Выборочное проксирование. Разрешённые и запрещённые приложения Android
+     * смешивать не даёт: в режиме «только выбранные» само приложение и так
+     * остаётся вне туннеля, в остальных — исключается явно.
+     */
+    private fun applyAppMode(builder: Builder, settings: AppSettings) {
+        val apps = settings.apps.filter { it != packageName }
+        when (settings.appMode) {
+            AppMode.ALL -> builder.addDisallowedApplication(packageName)
+            AppMode.EXCEPT -> {
+                builder.addDisallowedApplication(packageName)
+                // Удалённое приложение из списка не должно ломать подключение.
+                apps.forEach { runCatching { builder.addDisallowedApplication(it) } }
+            }
+            AppMode.ONLY -> {
+                val allowed = apps.count { runCatching { builder.addAllowedApplication(it) }.isSuccess }
+                check(allowed > 0) { "Выберите приложения, которые пойдут через VPN" }
+            }
+        }
     }
 
     /** Системе нужен IP; если в настройках DoH/доменное имя — берём публичный DNS. */
@@ -118,6 +209,8 @@ class KvnVpnService : VpnService() {
     }
 
     private fun fail(message: String) {
+        enabled = false
+        stopWifiMonitor()
         VpnController.update(VpnState.Failed(message))
         releaseTun()
         stopForegroundCompat()
@@ -125,6 +218,8 @@ class KvnVpnService : VpnService() {
     }
 
     private fun shutdown() {
+        enabled = false
+        stopWifiMonitor()
         VpnController.update(VpnState.Stopping)
         releaseTun()
         VpnController.update(VpnState.Idle)
@@ -145,7 +240,8 @@ class KvnVpnService : VpnService() {
     }
 
     override fun onDestroy() {
-        if (tun != null) {
+        stopWifiMonitor()
+        if (tun != null || VpnController.state.value is VpnState.Paused) {
             releaseTun()
             VpnController.update(VpnState.Idle)
         }

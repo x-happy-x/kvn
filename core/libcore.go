@@ -26,6 +26,9 @@ const (
 type engine interface {
 	Stop() error
 	Logs() string
+	// DialProxy открывает TCP-соединение через прокси текущего ядра — без
+	// локальных портов, которые могли бы увидеть другие приложения.
+	DialProxy(ctx context.Context, host string, port int) (net.Conn, error)
 }
 
 var (

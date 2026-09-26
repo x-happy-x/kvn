@@ -7,6 +7,7 @@ import android.net.Uri
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
@@ -34,6 +35,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Dns
 import androidx.compose.material.icons.rounded.Home
+import androidx.compose.material.icons.rounded.Radar
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Scaffold
@@ -60,12 +62,20 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.kvn.client.ui.MainViewModel
 import io.kvn.client.ui.screens.AddSubscriptionSheet
+import io.kvn.client.ui.screens.AppsScreen
 import io.kvn.client.ui.screens.HomeScreen
+import io.kvn.client.ui.screens.LoginSheet
+import io.kvn.client.ui.screens.ScanScreen
 import io.kvn.client.ui.screens.ServersScreen
 import io.kvn.client.ui.screens.SettingsScreen
-import io.kvn.client.ui.theme.Palette
+import io.kvn.client.ui.screens.WifiScreen
 import io.kvn.client.ui.theme.KvnTheme
+import io.kvn.client.ui.theme.Palette
+import io.kvn.client.vpn.VpnState
 import kotlinx.coroutines.flow.MutableStateFlow
+
+/** Разрешения, от которых зависит интерфейс; пересчитываются при возврате в приложение. */
+data class Permissions(val location: Boolean = false, val backgroundLocation: Boolean = false)
 
 class MainActivity : ComponentActivity() {
     private val viewModel: MainViewModel by viewModels()
@@ -73,11 +83,22 @@ class MainActivity : ComponentActivity() {
     /** Ссылка из kvn://import?url=… — открывает окно добавления с подставленным адресом. */
     private val pendingImport = MutableStateFlow<String?>(null)
 
+    private val permissions = MutableStateFlow(Permissions())
+
     private val vpnPermission = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == RESULT_OK) viewModel.connectAfterPermission()
     }
 
     private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+
+    private val locationPermission = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+        refreshPermissions()
+    }
+
+    private val backgroundLocationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        refreshPermissions()
+        if (!granted) openAppSettings()
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -92,12 +113,20 @@ class MainActivity : ComponentActivity() {
             KvnTheme {
                 App(
                     viewModel = viewModel,
+                    permissions = permissions.collectAsStateWithLifecycle().value,
                     pendingImport = pendingImport.collectAsStateWithLifecycle().value,
                     onImportConsumed = { pendingImport.value = null },
                     onToggle = ::toggleVpn,
+                    onRequestLocation = ::requestLocation,
+                    onRequestBackgroundLocation = ::requestBackgroundLocation,
                 )
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        refreshPermissions()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -122,11 +151,40 @@ class MainActivity : ComponentActivity() {
         viewModel.toggle(needsPermission = prepare != null) { prepare?.let { vpnPermission.launch(it) } }
     }
 
+    private fun granted(permission: String) =
+        ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
+
+    private fun refreshPermissions() {
+        val location = granted(Manifest.permission.ACCESS_FINE_LOCATION)
+        val background = location &&
+            (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q || granted(Manifest.permission.ACCESS_BACKGROUND_LOCATION))
+        permissions.value = Permissions(location = location, backgroundLocation = background)
+    }
+
+    private fun requestLocation() {
+        locationPermission.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
+    }
+
+    /** Фоновый доступ Android выдаёт только после обычного, а с 11-й версии — через настройки. */
+    private fun requestBackgroundLocation() {
+        if (!permissions.value.location) {
+            requestLocation()
+            return
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            backgroundLocationPermission.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+        }
+    }
+
+    private fun openAppSettings() {
+        runCatching {
+            startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", packageName, null)))
+        }
+    }
+
     private fun askNotificationPermission() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
-        val granted = ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) ==
-            PackageManager.PERMISSION_GRANTED
-        if (!granted) notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        if (!granted(Manifest.permission.POST_NOTIFICATIONS)) notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
 
     companion object {
@@ -137,15 +195,22 @@ class MainActivity : ComponentActivity() {
 private enum class Tab(val title: String, val icon: ImageVector) {
     HOME("Главная", Icons.Rounded.Home),
     SERVERS("Серверы", Icons.Rounded.Dns),
+    SCAN("Проверка", Icons.Rounded.Radar),
     SETTINGS("Настройки", Icons.Rounded.Settings),
 }
+
+/** Экраны, открывающиеся поверх вкладок. */
+private enum class Overlay { NONE, APPS, WIFI }
 
 @Composable
 private fun App(
     viewModel: MainViewModel,
+    permissions: Permissions,
     pendingImport: String?,
     onImportConsumed: () -> Unit,
     onToggle: () -> Unit,
+    onRequestLocation: () -> Unit,
+    onRequestBackgroundLocation: () -> Unit,
 ) {
     val subscriptions by viewModel.subscriptions.collectAsStateWithLifecycle()
     val settings by viewModel.settings.collectAsStateWithLifecycle()
@@ -155,10 +220,17 @@ private fun App(
     val pinging by viewModel.pinging.collectAsStateWithLifecycle()
     val refreshing by viewModel.refreshing.collectAsStateWithLifecycle()
     val traffic by viewModel.traffic.collectAsStateWithLifecycle()
+    val accountBusy by viewModel.accountBusy.collectAsStateWithLifecycle()
+    val apps by viewModel.apps.collectAsStateWithLifecycle()
+    val scanTargets by viewModel.scanTargets.collectAsStateWithLifecycle()
+    val scanResults by viewModel.scanResults.collectAsStateWithLifecycle()
+    val scanProgress by viewModel.scanProgress.collectAsStateWithLifecycle()
 
     var tab by rememberSaveable { mutableStateOf(Tab.HOME) }
+    var overlay by rememberSaveable { mutableStateOf(Overlay.NONE) }
     var adding by rememberSaveable { mutableStateOf(false) }
     var addUrl by rememberSaveable { mutableStateOf("") }
+    var loggingIn by rememberSaveable { mutableStateOf(false) }
     val snackbar = remember { SnackbarHostState() }
 
     LaunchedEffect(Unit) {
@@ -183,7 +255,9 @@ private fun App(
                 Snackbar(it, containerColor = Palette.SurfaceHighest, contentColor = Palette.TextPrimary, shape = RoundedCornerShape(14.dp))
             }
         },
-        bottomBar = { BottomBar(tab) { tab = it } },
+        bottomBar = {
+            if (overlay == Overlay.NONE) BottomBar(tab) { tab = it }
+        },
     ) { padding ->
         Box(
             Modifier
@@ -192,44 +266,92 @@ private fun App(
                 .statusBarsPadding()
                 .padding(bottom = padding.calculateBottomPadding()),
         ) {
-            Crossfade(targetState = tab, label = "tab") { current ->
-                when (current) {
-                    Tab.HOME -> HomeScreen(
-                        state = state,
-                        engine = settings.engine,
-                        node = node,
-                        ping = node?.let { pings[it.id] },
-                        subscription = subscriptions.firstOrNull { it.id == node?.subscriptionId },
-                        traffic = traffic,
-                        onToggle = onToggle,
-                        onEngine = viewModel::setEngine,
-                        onOpenServers = { tab = Tab.SERVERS },
-                        onAddSubscription = { adding = true },
-                    )
-                    Tab.SERVERS -> ServersScreen(
-                        subscriptions = subscriptions,
-                        selectedId = node?.id,
-                        engine = settings.engine,
-                        pings = pings,
-                        pinging = pinging,
-                        refreshing = refreshing,
-                        onSelect = viewModel::select,
-                        onPingAll = viewModel::pingAll,
-                        onFastest = viewModel::selectFastest,
-                        onRefreshAll = viewModel::refreshAll,
-                        onRefresh = viewModel::refresh,
-                        onRename = viewModel::rename,
-                        onDelete = viewModel::delete,
-                        onAdd = { adding = true },
-                    )
-                    Tab.SETTINGS -> SettingsScreen(
+            when (overlay) {
+                Overlay.APPS -> {
+                    LaunchedEffect(Unit) { viewModel.loadApps() }
+                    AppsScreen(
                         settings = settings,
-                        versions = viewModel.versions,
-                        onEngine = viewModel::setEngine,
-                        onUpdate = { restart, transform -> viewModel.updateSettings(restart, transform) },
-                        loadLogs = viewModel::logs,
-                        loadConfig = viewModel::configPreview,
+                        apps = apps,
+                        onBack = {
+                            overlay = Overlay.NONE
+                            viewModel.applyRouting()
+                        },
+                        onMode = viewModel::setAppMode,
+                        onToggle = viewModel::toggleApp,
                     )
+                }
+                Overlay.WIFI -> WifiScreen(
+                    settings = settings,
+                    hasLocation = permissions.location,
+                    hasBackgroundLocation = permissions.backgroundLocation,
+                    currentNetwork = viewModel::currentWifiName,
+                    onBack = {
+                        overlay = Overlay.NONE
+                        viewModel.applyRouting()
+                    },
+                    onMode = { mode -> viewModel.updateSettings(restart = false) { it.copy(wifiMode = mode) } },
+                    onNetworks = { networks -> viewModel.updateSettings(restart = false) { it.copy(wifiNetworks = networks) } },
+                    onRequestLocation = onRequestLocation,
+                    onRequestBackgroundLocation = onRequestBackgroundLocation,
+                )
+                Overlay.NONE -> Crossfade(targetState = tab, label = "tab") { current ->
+                    when (current) {
+                        Tab.HOME -> HomeScreen(
+                            state = state,
+                            engine = settings.engine,
+                            node = node,
+                            ping = node?.let { pings[it.id] },
+                            subscription = subscriptions.firstOrNull { it.id == node?.subscriptionId },
+                            traffic = traffic,
+                            onToggle = onToggle,
+                            onOpenSettings = { tab = Tab.SETTINGS },
+                            onOpenServers = { tab = Tab.SERVERS },
+                            onAddSubscription = { adding = true },
+                        )
+                        Tab.SERVERS -> ServersScreen(
+                            subscriptions = subscriptions,
+                            selectedId = node?.id,
+                            engine = settings.engine,
+                            pings = pings,
+                            pinging = pinging,
+                            refreshing = refreshing,
+                            onSelect = viewModel::select,
+                            onPingAll = viewModel::pingAll,
+                            onFastest = viewModel::selectFastest,
+                            onRefreshAll = viewModel::refreshAll,
+                            onRefresh = viewModel::refresh,
+                            onRename = viewModel::rename,
+                            onDelete = viewModel::delete,
+                            onAdd = { adding = true },
+                        )
+                        Tab.SCAN -> ScanScreen(
+                            presets = viewModel.scanPresets,
+                            targets = scanTargets,
+                            results = scanResults,
+                            progress = scanProgress,
+                            vpnConnected = state is VpnState.Connected,
+                            onAdd = viewModel::addScanTargets,
+                            onRemove = viewModel::removeScanTarget,
+                            onClear = viewModel::clearScanTargets,
+                            onRun = { viewModel.runScan() },
+                            onRunOne = { viewModel.runScan(listOf(it)) },
+                            onStop = viewModel::stopScan,
+                        )
+                        Tab.SETTINGS -> SettingsScreen(
+                            settings = settings,
+                            versions = viewModel.versions,
+                            accountBusy = accountBusy,
+                            onEngine = viewModel::setEngine,
+                            onUpdate = { restart, transform -> viewModel.updateSettings(restart, transform) },
+                            onLogin = { loggingIn = true },
+                            onSync = viewModel::subLabSync,
+                            onLogout = viewModel::subLabLogout,
+                            onOpenApps = { overlay = Overlay.APPS },
+                            onOpenWifi = { overlay = Overlay.WIFI },
+                            loadLogs = viewModel::logs,
+                            loadConfig = viewModel::configPreview,
+                        )
+                    }
                 }
             }
         }
@@ -249,6 +371,18 @@ private fun App(
                     addUrl = ""
                     tab = Tab.SERVERS
                 }
+            },
+        )
+    }
+
+    if (loggingIn) {
+        LoginSheet(
+            initialServer = settings.account.server,
+            initialLogin = settings.account.username,
+            busy = accountBusy,
+            onDismiss = { loggingIn = false },
+            onSubmit = { server, login, password ->
+                viewModel.subLabLogin(server, login, password) { loggingIn = false }
             },
         )
     }
@@ -276,7 +410,7 @@ private fun BottomBar(selected: Tab, onSelect: (Tab) -> Unit) {
                 val active = tab == selected
                 Row(
                     Modifier
-                        .weight(1f)
+                        .weight(if (active) 1.6f else 1f)
                         .clip(RoundedCornerShape(16.dp))
                         .background(if (active) Palette.SurfaceHighest else Color.Transparent)
                         .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { onSelect(tab) }
@@ -292,7 +426,7 @@ private fun BottomBar(selected: Tab, onSelect: (Tab) -> Unit) {
                     )
                     if (active) {
                         Spacer(Modifier.size(8.dp))
-                        Text(tab.title, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Palette.TextPrimary)
+                        Text(tab.title, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Palette.TextPrimary, maxLines = 1)
                     }
                 }
             }

@@ -52,6 +52,7 @@ import androidx.compose.ui.unit.sp
 import io.kvn.client.core.Engine
 import io.kvn.client.data.ServerNode
 import io.kvn.client.data.Subscription
+import io.kvn.client.data.SubscriptionSource
 import io.kvn.client.ui.Pings
 import io.kvn.client.ui.components.Chip
 import io.kvn.client.ui.components.FlagBadge
@@ -118,9 +119,9 @@ fun ServersScreen(
         ) {
             subscriptions.forEach { subscription ->
                 item(key = "header-${subscription.id}") {
-                    SubscriptionHeader(subscription, onRefresh, onRename, onDelete)
+                    SubscriptionHeader(subscription, engine, onRefresh, onRename, onDelete)
                 }
-                items(subscription.nodes, key = { it.id }) { node ->
+                items(subscription.nodesFor(engine), key = { it.id }) { node ->
                     ServerRow(
                         node = node,
                         selected = node.id == selectedId,
@@ -144,6 +145,7 @@ private fun ToolbarButton(icon: ImageVector, description: String, onClick: () ->
 @Composable
 private fun SubscriptionHeader(
     subscription: Subscription,
+    engine: Engine,
     onRefresh: (Subscription) -> Unit,
     onRename: (Subscription, String) -> Unit,
     onDelete: (Subscription) -> Unit,
@@ -166,8 +168,9 @@ private fun SubscriptionHeader(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            val count = subscription.nodes.size.toLong()
+            val count = subscription.nodesFor(engine).size.toLong()
             val details = buildList {
+                if (subscription.source == SubscriptionSource.SUBLAB) add("sub-lab")
                 add("$count ${plural(count, "сервер", "сервера", "серверов")}")
                 if (subscription.total > 0) add("${formatBytes(subscription.used)} / ${formatBytes(subscription.total)}")
                 expireLabel(subscription.expire)?.let { add(it) }
@@ -203,14 +206,18 @@ private fun SubscriptionHeader(
                         renaming = true
                     },
                 )
-                DropdownMenuItem(
-                    text = { Text("Удалить", color = Palette.Red) },
-                    leadingIcon = { Icon(Icons.Rounded.Delete, null, tint = Palette.Red) },
-                    onClick = {
-                        menu = false
-                        confirmDelete = true
-                    },
-                )
+                // Подписки аккаунта sub-lab вернутся при следующей синхронизации —
+                // убирать их нужно в sub-lab или выходом из аккаунта.
+                if (subscription.source != SubscriptionSource.SUBLAB) {
+                    DropdownMenuItem(
+                        text = { Text("Удалить", color = Palette.Red) },
+                        leadingIcon = { Icon(Icons.Rounded.Delete, null, tint = Palette.Red) },
+                        onClick = {
+                            menu = false
+                            confirmDelete = true
+                        },
+                    )
+                }
             }
         }
     }

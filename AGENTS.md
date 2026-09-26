@@ -3,7 +3,8 @@
 KVN — Android-клиент с двумя ядрами (xray-core и mihomo) и переключением между ними. Подробности — в `README.md`.
 
 ## Структура
-- `core/` — Go-библиотека `libcore` (gomobile → `libcore.aar`): разбор подписок (`node.go`), конвертация xray ⇄ mihomo (`convert.go`), запуск ядер на fd TUN (`engine_xray.go`, `engine_mihomo.go`), API для Android (`libcore.go`).
+- `core/` — Go-библиотека `libcore` (gomobile → `libcore.aar`): разбор подписок (`node.go`), конвертация xray ⇄ mihomo (`convert.go`), запуск ядер на fd TUN (`engine_xray.go`, `engine_mihomo.go`), проверка доступности ресурсов (`scan.go`, порт анализатора HomeNet), API для Android (`libcore.go`).
+- Подписки запрашиваются под Happ (xray) и FlClashX (mihomo), см. `android/.../data/Mimicry.kt`; вход в sub-lab — `data/SubLabClient.kt` (`POST /api/auth/password`, `GET /api/favorites`).
 - `android/` — приложение на Kotlin/Jetpack Compose, пакет `io.kvn.client`.
 - `build-core.sh` — сборка `android/app/libs/libcore.aar` (нужны `ANDROID_HOME`, `ANDROID_NDK_HOME`).
 - `.github/workflows/build.yml` — тесты, APK, пререлиз `nightly` из `main`, релизы по тегам `v*`.
