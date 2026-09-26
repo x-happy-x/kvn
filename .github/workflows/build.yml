@@ -131,6 +131,34 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+      # Каждый APK — отдельным артефактом без zip: скачивается сразу как .apk.
+      - uses: actions/upload-artifact@v7
+        with:
+          path: dist/*-universal.apk
+          archive: false
+          if-no-files-found: error
+
+      # Каждый APK — отдельным артефактом без zip: скачивается сразу как .apk.
+      - uses: actions/upload-artifact@v7
+        with:
+          path: dist/*-arm64-v8a.apk
+          archive: false
+          if-no-files-found: error
+
+      # Каждый APK — отдельным артефактом без zip: скачивается сразу как .apk.
+      - uses: actions/upload-artifact@v7
+        with:
+          path: dist/*-armeabi-v7a.apk
+          archive: false
+          if-no-files-found: error
+
+      # Каждый APK — отдельным артефактом без zip: скачивается сразу как .apk.
+      - uses: actions/upload-artifact@v7
+        with:
+          path: dist/*-x86_64.apk
+          archive: false
+          if-no-files-found: error
+
   publish:
     needs: apk
     if: github.event_name == 'push'
