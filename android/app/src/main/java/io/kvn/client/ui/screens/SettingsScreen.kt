@@ -1,5 +1,11 @@
 package io.kvn.client.ui.screens
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -32,6 +38,7 @@ import androidx.compose.material.icons.rounded.Lan
 import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.Memory
 import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.rounded.School
 import androidx.compose.material.icons.rounded.Sync
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.Wifi
@@ -92,6 +99,8 @@ fun SettingsScreen(
     onLogout: () -> Unit,
     onOpenApps: () -> Unit,
     onOpenWifi: () -> Unit,
+    onOpenWhitelist: () -> Unit = {},
+    onShowIntro: () -> Unit = {},
     onAddTile: (() -> Unit)?,
     loadLogs: suspend () -> String,
     loadConfig: suspend () -> String,
@@ -112,34 +121,6 @@ fun SettingsScreen(
             modifier = Modifier.padding(start = 4.dp, top = 20.dp, bottom = 8.dp),
         )
 
-        SectionTitle("Ядро")
-        Panel(Modifier.fillMaxWidth()) {
-            EngineSwitch(selected = settings.engine, onSelect = onEngine, modifier = Modifier.fillMaxWidth())
-            Spacer(Modifier.height(12.dp))
-            Text(
-                when (settings.engine) {
-                    Engine.XRAY -> "Xray-core: VLESS (Reality, XHTTP, Vision), VMess, Trojan, Shadowsocks, Hysteria2."
-                    Engine.MIHOMO -> "Mihomo (Clash Meta): всё то же плюс TUIC, Hysteria, WireGuard, AnyTLS и Shadowsocks-плагины."
-                },
-                color = Palette.TextSecondary,
-                fontSize = 13.sp,
-            )
-            Spacer(Modifier.height(6.dp))
-            Text(
-                "Подписка запрашивается как ${Mimicry.clientName(settings.engine)}: при смене ядра она скачивается заново со своими заголовками.",
-                color = Palette.TextMuted,
-                fontSize = 12.sp,
-            )
-            if (versions.isNotEmpty()) {
-                Spacer(Modifier.height(8.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Rounded.Memory, null, tint = Palette.TextMuted, modifier = Modifier.size(14.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text(versions, color = Palette.TextMuted, fontSize = 12.sp)
-                }
-            }
-        }
-
         SectionTitle("Авто-режим")
         AutoPanel(settings.auto) { transform -> onUpdate(true) { it.copy(auto = transform(it.auto)) } }
 
@@ -156,31 +137,13 @@ fun SettingsScreen(
                 onUpdate(true) { it.copy(bypassLan = value) }
             }
             Divider()
-            ToggleRow(Icons.Rounded.Flag, "Российские сайты напрямую", "Домены .ru, .рф и .su — мимо VPN", settings.directRu) { value ->
-                onUpdate(true) { it.copy(directRu = value) }
-            }
-            Divider()
-            ToggleRow(Icons.Rounded.Language, "IPv6", "Пускать IPv6-трафик через туннель", settings.ipv6) { value ->
-                onUpdate(true) { it.copy(ipv6 = value) }
-            }
-        }
-
-        SectionTitle("Обход блокировок (Xray)")
-        BypassPanel(settings.bypass, settings.engine) { transform -> onUpdate(true) { it.copy(bypass = transform(it.bypass)) } }
-
-        SectionTitle("Сеть")
-        Panel(Modifier.fillMaxWidth()) {
-            ValueRow(Icons.Rounded.Dns, "DNS", settings.dns) { editing = EditField.DNS }
-            Divider()
-            ValueRow(Icons.Rounded.Person, "User-Agent для Xray", Mimicry.userAgent(Engine.XRAY, settings)) { editing = EditField.UA_XRAY }
-            Divider()
-            ValueRow(Icons.Rounded.Person, "User-Agent для Mihomo", Mimicry.userAgent(Engine.MIHOMO, settings)) { editing = EditField.UA_MIHOMO }
-            Divider()
-            ValueRow(Icons.Rounded.Tune, "Уровень журнала", settings.logLevel) { editing = EditField.LOG_LEVEL }
+            ValueRow(Icons.Rounded.Flag, "Сайты напрямую", whitelistSummary(settings), onOpenWhitelist)
         }
 
         SectionTitle("Быстрый доступ")
         Panel(Modifier.fillMaxWidth()) {
+            ValueRow(Icons.Rounded.School, "Как пользоваться", "Пройти вводную инструкцию заново", onShowIntro)
+            Divider()
             ToggleRow(
                 Icons.Rounded.ContentPaste,
                 "Ссылки из буфера обмена",
@@ -193,11 +156,79 @@ fun SettingsScreen(
             }
         }
 
-        SectionTitle("Диагностика")
+        // Всё техническое спрятано: обычному пользователю хватает того, что выше.
+        Spacer(Modifier.height(16.dp))
         Panel(Modifier.fillMaxWidth()) {
-            ValueRow(Icons.AutoMirrored.Rounded.Notes, "Журнал ядра", "") { textDialog = TextDialog("Журнал", loadLogs) }
-            Divider()
-            ValueRow(Icons.Rounded.Code, "Конфиг текущего сервера", "") { textDialog = TextDialog("Конфиг ${settings.engine.title}", loadConfig) }
+            ToggleRow(
+                Icons.Rounded.Tune,
+                "Настройки для опытных",
+                "Ядро, IPv6, обход блокировок, DNS, журнал",
+                settings.advanced,
+            ) { value -> onUpdate(false) { it.copy(advanced = value) } }
+        }
+
+        AnimatedVisibility(
+            visible = settings.advanced,
+            enter = fadeIn(tween(250)) + expandVertically(tween(320)),
+            exit = fadeOut(tween(180)) + shrinkVertically(tween(260)),
+        ) {
+            Column {
+            SectionTitle("Ядро")
+            Panel(Modifier.fillMaxWidth()) {
+                EngineSwitch(selected = settings.engine, onSelect = onEngine, modifier = Modifier.fillMaxWidth())
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    when (settings.engine) {
+                        Engine.XRAY -> "Xray-core: VLESS (Reality, XHTTP, Vision), VMess, Trojan, Shadowsocks, Hysteria2."
+                        Engine.MIHOMO -> "Mihomo (Clash Meta): всё то же плюс TUIC, Hysteria, WireGuard, AnyTLS и Shadowsocks-плагины."
+                    },
+                    color = Palette.TextSecondary,
+                    fontSize = 13.sp,
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "Подписка запрашивается как ${Mimicry.clientName(settings.engine)}: при смене ядра она скачивается заново со своими заголовками.",
+                    color = Palette.TextMuted,
+                    fontSize = 12.sp,
+                )
+                if (versions.isNotEmpty()) {
+                    Spacer(Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Rounded.Memory, null, tint = Palette.TextMuted, modifier = Modifier.size(14.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text(versions, color = Palette.TextMuted, fontSize = 12.sp)
+                    }
+                }
+            }
+
+            SectionTitle("IPv6")
+            Panel(Modifier.fillMaxWidth()) {
+                ToggleRow(Icons.Rounded.Language, "IPv6", "Пускать IPv6-трафик через туннель", settings.ipv6) { value ->
+                    onUpdate(true) { it.copy(ipv6 = value) }
+                }
+            }
+
+            SectionTitle("Обход блокировок (Xray)")
+            BypassPanel(settings.bypass, settings.engine) { transform -> onUpdate(true) { it.copy(bypass = transform(it.bypass)) } }
+
+            SectionTitle("Сеть")
+            Panel(Modifier.fillMaxWidth()) {
+                ValueRow(Icons.Rounded.Dns, "DNS", settings.dns) { editing = EditField.DNS }
+                Divider()
+                ValueRow(Icons.Rounded.Person, "User-Agent для Xray", Mimicry.userAgent(Engine.XRAY, settings)) { editing = EditField.UA_XRAY }
+                Divider()
+                ValueRow(Icons.Rounded.Person, "User-Agent для Mihomo", Mimicry.userAgent(Engine.MIHOMO, settings)) { editing = EditField.UA_MIHOMO }
+                Divider()
+                ValueRow(Icons.Rounded.Tune, "Уровень журнала", settings.logLevel) { editing = EditField.LOG_LEVEL }
+            }
+
+            SectionTitle("Диагностика")
+            Panel(Modifier.fillMaxWidth()) {
+                ValueRow(Icons.AutoMirrored.Rounded.Notes, "Журнал ядра", "") { textDialog = TextDialog("Журнал", loadLogs) }
+                Divider()
+                ValueRow(Icons.Rounded.Code, "Конфиг текущего сервера", "") { textDialog = TextDialog("Конфиг ${settings.engine.title}", loadConfig) }
+            }
+            }
         }
 
         Spacer(Modifier.height(24.dp))
@@ -232,6 +263,11 @@ private fun appsSummary(settings: AppSettings): String = when (settings.appMode)
     AppMode.ONLY -> "Только выбранные: ${settings.apps.size}"
     AppMode.EXCEPT -> "Кроме выбранных: ${settings.apps.size}"
 }
+
+private fun whitelistSummary(settings: AppSettings): String = buildList {
+    if (settings.whitelistEnabled) add("Белый список: ${settings.whitelistDomains.size}") else add("Белый список выключен")
+    if (settings.directRu) add("вся зона .ru")
+}.joinToString(" · ")
 
 private fun wifiSummary(settings: AppSettings): String = when (settings.wifiMode) {
     WifiMode.OFF -> WifiMode.OFF.title

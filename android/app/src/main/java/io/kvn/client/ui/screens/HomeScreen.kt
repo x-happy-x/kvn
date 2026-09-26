@@ -81,6 +81,7 @@ fun HomeScreen(
     onOpenSettings: () -> Unit,
     onOpenServers: () -> Unit,
     onAddSubscription: () -> Unit,
+    onHelp: () -> Unit = {},
 ) {
     val power = when (state) {
         is VpnState.Connected -> PowerState.ON
@@ -97,7 +98,7 @@ fun HomeScreen(
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         // Блоки появляются по очереди — экран «собирается», а не возникает целиком.
-        AppearIn(0) { Header(power, engine, auto, onOpenSettings) }
+        AppearIn(0) { Header(power, engine, auto, onOpenSettings, onHelp) }
         Spacer(Modifier.height(20.dp))
 
         AppearIn(1) { PowerButton(state = power, onClick = onToggle) }
@@ -131,7 +132,7 @@ fun HomeScreen(
 
 /** Шапка: название и текущее ядро (переключается в настройках). */
 @Composable
-private fun Header(power: PowerState, engine: Engine, auto: Boolean, onOpenSettings: () -> Unit) {
+private fun Header(power: PowerState, engine: Engine, auto: Boolean, onOpenSettings: () -> Unit, onHelp: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -159,6 +160,18 @@ private fun Header(power: PowerState, engine: Engine, auto: Boolean, onOpenSetti
             )
             Spacer(Modifier.width(8.dp))
         }
+        // Повторить вводную инструкцию.
+        Box(
+            Modifier
+                .size(32.dp)
+                .clip(CircleShape)
+                .background(Palette.Surface)
+                .clickable(onClick = onHelp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text("?", color = Palette.TextSecondary, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+        }
+        Spacer(Modifier.width(8.dp))
         Row(
             modifier = Modifier
                 .clip(RoundedCornerShape(12.dp))

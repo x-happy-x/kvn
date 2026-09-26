@@ -23,7 +23,9 @@ import io.kvn.client.data.ScanPreset
 import io.kvn.client.data.ScanResult
 import io.kvn.client.data.ServerNode
 import io.kvn.client.data.SubLabClient
+import io.kvn.client.data.ServerSort
 import io.kvn.client.data.Subscription
+import io.kvn.client.data.Whitelist
 import io.kvn.client.data.parseScanPresets
 import io.kvn.client.vpn.VpnController
 import io.kvn.client.vpn.VpnState
@@ -436,6 +438,59 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun setAppMode(mode: AppMode) = updateSettings(restart = false) { it.copy(appMode = mode) }
+
+    /**
+     * Приложения из белого списка — напрямую. В режиме «все» включается
+     * «все, кроме выбранных»; в режиме «только выбранные» они убираются из
+     * списка. Учитываются только установленные.
+     */
+    fun excludeWhitelistApps() {
+        val installed = _apps.value?.map { it.packageName }?.toSet() ?: return
+        val presets = Whitelist.PRESET_PACKAGES.intersect(installed)
+        if (presets.isEmpty()) {
+            _messages.tryEmit("Приложений из белого списка не найдено")
+            return
+        }
+        updateSettings(restart = false) {
+            when (it.appMode) {
+                AppMode.ONLY -> it.copy(apps = it.apps - presets)
+                else -> it.copy(appMode = AppMode.EXCEPT, apps = it.apps + presets)
+            }
+        }
+        _messages.tryEmit("Напрямую: ${presets.size} ${io.kvn.client.ui.components.plural(presets.size.toLong(), "приложение", "приложения", "приложений")}")
+    }
+
+    // ---------- белый список сайтов ----------
+
+    // Как и приложения, правки применяются при выходе с экрана.
+    fun setWhitelistEnabled(enabled: Boolean) = updateSettings(restart = false) { it.copy(whitelistEnabled = enabled) }
+
+    fun setDirectRu(enabled: Boolean) = updateSettings(restart = false) { it.copy(directRu = enabled) }
+
+    /** Добавляет домены из вставленного текста; возвращает, сколько новых. */
+    fun addWhitelistDomains(text: String): Int {
+        val parsed = Whitelist.parseDomains(text)
+        val current = settings.value.whitelistDomains
+        val fresh = parsed.filter { it !in current }
+        if (fresh.isNotEmpty()) updateSettings(restart = false) { it.copy(whitelistDomains = fresh + it.whitelistDomains) }
+        return fresh.size
+    }
+
+    fun removeWhitelistDomain(domain: String) = updateSettings(restart = false) { it.copy(whitelistDomains = it.whitelistDomains - domain) }
+
+    fun resetWhitelist() = updateSettings(restart = false) { it.copy(whitelistDomains = Whitelist.DEFAULT_DOMAINS) }
+
+    // ---------- вводная инструкция и вид ----------
+
+    fun finishOnboarding(auto: Boolean, whitelist: Boolean) = updateSettings {
+        it.copy(
+            onboarded = true,
+            auto = it.auto.copy(selectBest = auto, healthCheck = auto || it.auto.healthCheck, failover = auto || it.auto.failover),
+            whitelistEnabled = whitelist,
+        )
+    }
+
+    fun setServerSort(sort: ServerSort) = updateSettings(restart = false) { it.copy(serverSort = sort) }
 
     /** Применяет накопленные правки маршрутизации к работающему VPN. */
     fun applyRouting() = restartIfActive()

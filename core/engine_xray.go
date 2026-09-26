@@ -76,9 +76,9 @@ func buildXrayOutboundConfig(node *Node, options *Options, logPath string) (map[
 	if options.BypassLAN {
 		rules = append(rules, map[string]any{"type": "field", "ip": privateCIDRs, "outboundTag": "direct"})
 	}
-	if options.DirectRU {
-		domains := make([]string, 0, len(ruSuffixes))
-		for _, suffix := range ruSuffixes {
+	if suffixes := directSuffixes(options); len(suffixes) > 0 {
+		domains := make([]string, 0, len(suffixes))
+		for _, suffix := range suffixes {
 			domains = append(domains, "domain:"+suffix)
 		}
 		rules = append(rules, map[string]any{"type": "field", "domain": domains, "outboundTag": "direct"})

@@ -210,3 +210,19 @@ func TestHTTPFetchAndCheckConnection(t *testing.T) {
 		t.Fatal("без запущенного ядра проверка должна падать")
 	}
 }
+
+func TestDirectSuffixes(t *testing.T) {
+	options, err := parseOptions(`{"directDomains":["+.wb.ru","  - +.vk.com","*.ya.ru","https://gosuslugi.ru/path","DOMAIN-SUFFIX,mos.ru","+.избирком.рф","wb.ru","","# comment"]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Join(directSuffixes(options), " ")
+	want := "wb.ru vk.com ya.ru gosuslugi.ru mos.ru xn--90alcckmno.xn--p1ai"
+	if got != want {
+		t.Fatalf("directSuffixes = %q, want %q", got, want)
+	}
+	options.DirectRU = true
+	if suffixes := directSuffixes(options); suffixes[0] != "ru" || len(suffixes) != 9 {
+		t.Fatalf("с DirectRU: %v", suffixes)
+	}
+}

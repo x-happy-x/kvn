@@ -203,6 +203,22 @@ enum class WifiMode(val id: String, val title: String) {
     }
 }
 
+/** Порядок серверов на экране «Серверы». */
+enum class ServerSort(val id: String, val title: String) {
+    /** Как в подписках, с заголовками подписок. */
+    SUBSCRIPTIONS("subscriptions", "По подпискам"),
+
+    /** Общим списком: сначала быстрые по последнему пингу, недоступные — в конце. */
+    PING("ping", "По пингу"),
+
+    /** Общим списком: сначала те, что чаще работают (история проверок). */
+    RELIABILITY("reliability", "По доступности");
+
+    companion object {
+        fun of(id: String?): ServerSort = entries.firstOrNull { it.id == id } ?: SUBSCRIPTIONS
+    }
+}
+
 /** Сессия аккаунта sub-lab: хранится только токен, пароль не сохраняется. */
 data class SubLabAccount(
     val server: String = "",
@@ -219,7 +235,11 @@ data class AppSettings(
     val selectedNodeId: String? = null,
     val dns: String = "1.1.1.1",
     val bypassLan: Boolean = true,
+    /** Весь .ru/.рф/.su мимо VPN (грубо; обычно хватает белого списка). */
     val directRu: Boolean = false,
+    /** Сайты из белого списка — мимо VPN. */
+    val whitelistEnabled: Boolean = true,
+    val whitelistDomains: List<String> = Whitelist.DEFAULT_DOMAINS,
     val ipv6: Boolean = false,
     /** Свой User-Agent для запросов подписки; пусто — мимикрия под Happ / FlClashX. */
     val userAgentXray: String = "",
@@ -236,6 +256,11 @@ data class AppSettings(
     /** Открывать окно добавления, если в буфере обмена ссылка клиента или сервера. */
     val clipboardImport: Boolean = true,
     val auto: AutoOptions = AutoOptions(),
+    /** Вводная инструкция пройдена (или пропущена). */
+    val onboarded: Boolean = false,
+    val serverSort: ServerSort = ServerSort.SUBSCRIPTIONS,
+    /** Показывать настройки для опытных: ядро, DNS, обход блокировок, диагностику. */
+    val advanced: Boolean = false,
 ) {
     /** Настройки в формате libcore Options. */
     fun coreOptions(mtu: Int): String = JSONObject().apply {
@@ -243,6 +268,7 @@ data class AppSettings(
         put("mtu", mtu)
         put("bypassLan", bypassLan)
         put("directRu", directRu)
+        put("directDomains", JSONArray().apply { if (whitelistEnabled) whitelistDomains.forEach { put(it) } })
         put("ipv6", ipv6)
         put("logLevel", logLevel)
         put("fragment", JSONObject().apply {

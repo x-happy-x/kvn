@@ -52,6 +52,9 @@ import androidx.compose.ui.unit.sp
 import androidx.core.graphics.drawable.toBitmap
 import io.kvn.client.data.AppMode
 import io.kvn.client.data.AppSettings
+import io.kvn.client.data.Whitelist
+import io.kvn.client.ui.components.Chip
+import io.kvn.client.ui.components.pressable
 import io.kvn.client.ui.InstalledApp
 import io.kvn.client.ui.theme.Palette
 import kotlinx.coroutines.Dispatchers
@@ -65,6 +68,7 @@ fun AppsScreen(
     onBack: () -> Unit,
     onMode: (AppMode) -> Unit,
     onToggle: (String) -> Unit,
+    onExcludeWhitelist: () -> Unit = {},
 ) {
     BackHandler(onBack = onBack)
     var query by remember { mutableStateOf("") }
@@ -114,6 +118,7 @@ fun AppsScreen(
             fontSize = 13.sp,
             modifier = Modifier.padding(horizontal = 20.dp),
         )
+        WhitelistBanner(settings, apps, onExcludeWhitelist)
 
         if (settings.appMode != AppMode.ALL) {
             OutlinedTextField(
@@ -156,13 +161,64 @@ fun AppsScreen(
             val visible = apps.filter { app ->
                 (showSystem || !app.system || app.packageName in settings.apps) &&
                     (needle.isEmpty() || app.label.lowercase().contains(needle) || app.packageName.contains(needle))
-            }.sortedByDescending { it.packageName in settings.apps }
+            }.sortedWith(
+                compareByDescending<InstalledApp> { it.packageName in settings.apps }
+                    .thenByDescending { it.packageName in Whitelist.PRESET_PACKAGES },
+            )
             LazyColumn(contentPadding = PaddingValues(start = 12.dp, end = 12.dp, bottom = 24.dp)) {
                 items(visible, key = { it.packageName }) { app ->
                     AppRow(app, checked = app.packageName in settings.apps) { onToggle(app.packageName) }
                 }
             }
         }
+    }
+}
+
+/**
+ * Быстрый выбор приложений из белых списков (банки, Госуслуги, маркетплейсы):
+ * одним нажатием они идут мимо VPN.
+ */
+@Composable
+private fun WhitelistBanner(settings: AppSettings, apps: List<InstalledApp>?, onExclude: () -> Unit) {
+    val installed = apps?.filter { it.packageName in Whitelist.PRESET_PACKAGES } ?: return
+    if (installed.isEmpty()) return
+    val direct = installed.count { app ->
+        when (settings.appMode) {
+            AppMode.ALL -> false
+            AppMode.EXCEPT -> app.packageName in settings.apps
+            AppMode.ONLY -> app.packageName !in settings.apps
+        }
+    }
+    val done = direct == installed.size
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 10.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(Palette.Surface)
+            .padding(14.dp),
+    ) {
+        Text("Приложения из белых списков", fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+        Text(
+            "Банки, Госуслуги, маркетплейсы и соцсети часто не работают через VPN. Установлено: " +
+                installed.joinToString(", ") { app -> Whitelist.PRESET_APPS.first { it.packageName == app.packageName }.title },
+            color = Palette.TextSecondary,
+            fontSize = 12.sp,
+            maxLines = 3,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Spacer(Modifier.size(10.dp))
+        Text(
+            if (done) "✓ Все идут напрямую" else "Пустить напрямую (${installed.size - direct})",
+            color = if (done) Palette.Green else Palette.TextPrimary,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier
+                .clip(RoundedCornerShape(12.dp))
+                .background(if (done) Palette.Green.copy(alpha = 0.12f) else Palette.Violet)
+                .pressable(enabled = !done, onClick = onExclude)
+                .padding(horizontal = 14.dp, vertical = 9.dp),
+        )
     }
 }
 
@@ -187,7 +243,13 @@ private fun AppRow(app: InstalledApp, checked: Boolean, onClick: () -> Unit) {
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(app.label, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(app.packageName, color = Palette.TextMuted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (app.packageName in Whitelist.PRESET_PACKAGES) {
+                    Chip("белый список", color = Palette.Green)
+                    Spacer(Modifier.width(6.dp))
+                }
+                Text(app.packageName, color = Palette.TextMuted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
         }
         Checkbox(checked = checked, onCheckedChange = { onClick() }, colors = checkboxColors())
     }

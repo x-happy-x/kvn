@@ -270,6 +270,10 @@ class Repository(private val context: Context) {
             dns = prefs.getString("dns", defaults.dns) ?: defaults.dns,
             bypassLan = prefs.getBoolean("bypassLan", defaults.bypassLan),
             directRu = prefs.getBoolean("directRu", defaults.directRu),
+            whitelistEnabled = prefs.getBoolean("whitelistEnabled", defaults.whitelistEnabled),
+            whitelistDomains = prefs.getString("whitelistDomains", null)
+                ?.split('\n')?.filter { it.isNotBlank() }
+                ?: defaults.whitelistDomains,
             ipv6 = prefs.getBoolean("ipv6", defaults.ipv6),
             userAgentXray = prefs.getString("userAgentXray", "").orEmpty(),
             userAgentMihomo = prefs.getString("userAgentMihomo", "").orEmpty(),
@@ -307,6 +311,9 @@ class Repository(private val context: Context) {
                 failures = prefs.getInt("autoFailures", 3),
                 failover = prefs.getBoolean("autoFailover", true),
             ),
+            onboarded = prefs.getBoolean("onboarded", false),
+            serverSort = ServerSort.of(prefs.getString("serverSort", null)),
+            advanced = prefs.getBoolean("advanced", false),
         )
     }
 
@@ -317,6 +324,8 @@ class Repository(private val context: Context) {
             .putString("dns", settings.dns)
             .putBoolean("bypassLan", settings.bypassLan)
             .putBoolean("directRu", settings.directRu)
+            .putBoolean("whitelistEnabled", settings.whitelistEnabled)
+            .putString("whitelistDomains", settings.whitelistDomains.joinToString("\n"))
             .putBoolean("ipv6", settings.ipv6)
             .putString("userAgentXray", settings.userAgentXray)
             .putString("userAgentMihomo", settings.userAgentMihomo)
@@ -348,6 +357,9 @@ class Repository(private val context: Context) {
             .putInt("autoIntervalMinutes", settings.auto.intervalMinutes)
             .putInt("autoFailures", settings.auto.failures)
             .putBoolean("autoFailover", settings.auto.failover)
+            .putBoolean("onboarded", settings.onboarded)
+            .putString("serverSort", settings.serverSort.id)
+            .putBoolean("advanced", settings.advanced)
             .apply()
     }
 }

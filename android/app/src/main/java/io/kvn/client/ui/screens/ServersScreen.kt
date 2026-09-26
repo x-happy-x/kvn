@@ -56,6 +56,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.kvn.client.core.Engine
 import io.kvn.client.data.ServerNode
+import io.kvn.client.data.ServerSort
 import io.kvn.client.data.NodeTest
 import io.kvn.client.data.PingRecord
 import io.kvn.client.data.Subscription
@@ -93,6 +94,8 @@ fun ServersScreen(
     nodeTests: Map<String, NodeTest> = emptyMap(),
     statsVersion: Int = 0,
     pingRecord: (ServerNode) -> PingRecord? = { null },
+    sort: ServerSort = ServerSort.SUBSCRIPTIONS,
+    onSort: (ServerSort) -> Unit = {},
 ) {
     Column(Modifier.fillMaxSize()) {
         Text(
@@ -120,16 +123,67 @@ fun ServersScreen(
             fontSize = 11.sp,
             modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 6.dp, bottom = 4.dp),
         )
+        SortRow(sort, onSort)
 
         if (subscriptions.isEmpty()) {
             EmptyServers(onAdd)
             return@Column
         }
 
+        // Общий список для сортировки по пингу или доступности: подписка видна в строке.
+        val flat = remember(subscriptions, engine, pings, sort, statsVersion) {
+            if (sort == ServerSort.SUBSCRIPTIONS) {
+                emptyList()
+            } else {
+                val all = subscriptions.flatMap { subscription ->
+                    subscription.visibleNodes(engine).map { node -> Triple(node, subscription, pingRecord(node)) }
+                }
+                when (sort) {
+                    ServerSort.PING -> all.sortedWith(
+                        compareBy<Triple<ServerNode, Subscription, PingRecord?>>(
+                            { (node, subscription, _) -> if (node.supports(subscription.effectiveEngine(engine))) 0 else 1 },
+                            { (node, _, _) ->
+                                val ms = pings[node.id]
+                                when {
+                                    ms == null -> 1
+                                    ms > 0 -> 0
+                                    else -> 2
+                                }
+                            },
+                            { (node, _, record) -> pings[node.id]?.takeIf { it > 0 } ?: record?.avgMs?.toInt()?.takeIf { it > 0 } ?: Int.MAX_VALUE },
+                        ),
+                    )
+                    else -> all.sortedWith(
+                        compareBy<Triple<ServerNode, Subscription, PingRecord?>>(
+                            { (node, subscription, _) -> if (node.supports(subscription.effectiveEngine(engine))) 0 else 1 },
+                            { (node, _, _) -> if ((pings[node.id] ?: 0) < 0) 1 else 0 },
+                        ).thenByDescending { (_, _, record) -> record?.successRate ?: 0.4 }
+                            .thenByDescending { (_, _, record) -> record?.score ?: 0.0 },
+                    )
+                }
+            }
+        }
+
         LazyColumn(
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            if (sort != ServerSort.SUBSCRIPTIONS) {
+                items(flat, key = { it.first.id }) { (node, subscription, record) ->
+                    ServerRow(
+                        modifier = Modifier.animateItem(),
+                        node = node,
+                        selected = node.id == selectedId,
+                        engine = subscription.effectiveEngine(engine),
+                        ping = pings[node.id],
+                        record = record,
+                        test = nodeTests[node.id],
+                        caption = subscription.name,
+                        onClick = { onSelect(node) },
+                    )
+                }
+                return@LazyColumn
+            }
             subscriptions.forEach { subscription ->
                 item(key = "header-${subscription.id}") {
                   Box(Modifier.animateItem()) {
@@ -151,6 +205,38 @@ fun ServersScreen(
                     )
                 }
             }
+        }
+    }
+}
+
+/** Переключатель порядка: по подпискам, по пингу или по доступности. */
+@Composable
+private fun SortRow(sort: ServerSort, onSort: (ServerSort) -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("Порядок:", color = Palette.TextMuted, fontSize = 12.sp)
+        ServerSort.entries.forEach { option ->
+            val active = option == sort
+            val background by animateColorAsState(if (active) Palette.Violet.copy(alpha = 0.22f) else Palette.Surface, tween(220), label = "sortBg")
+            val border by animateColorAsState(if (active) Palette.Violet else Palette.Stroke, tween(220), label = "sortBorder")
+            Text(
+                option.title,
+                color = if (active) Palette.TextPrimary else Palette.TextSecondary,
+                fontSize = 12.sp,
+                fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(background)
+                    .border(1.dp, border, RoundedCornerShape(10.dp))
+                    .pressable { onSort(option) }
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+            )
         }
     }
 }
@@ -348,6 +434,7 @@ private fun ServerRow(
     ping: Int?,
     record: PingRecord?,
     test: NodeTest?,
+    caption: String? = null,
     onClick: () -> Unit,
 ) {
     val supported = node.supports(engine)
@@ -384,6 +471,9 @@ private fun ServerRow(
                     "silent" -> Chip("не открывает", color = Palette.Red)
                     "ok" -> test?.let { Chip("${it.ms} мс", color = Palette.Green) }
                     else -> Unit
+                }
+                caption?.let {
+                    Text(it, color = Palette.TextMuted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
         }

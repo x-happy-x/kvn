@@ -52,10 +52,8 @@ func buildMihomoConfig(node *Node, options *Options, fd int) (map[string]any, er
 			rules = append(rules, fmt.Sprintf("%s,%s,DIRECT,no-resolve", kind, cidr))
 		}
 	}
-	if options.DirectRU {
-		for _, suffix := range ruSuffixes {
-			rules = append(rules, "DOMAIN-SUFFIX,"+suffix+",DIRECT")
-		}
+	for _, suffix := range directSuffixes(options) {
+		rules = append(rules, "DOMAIN-SUFFIX,"+suffix+",DIRECT")
 	}
 	rules = append(rules, "MATCH,"+mihomoGroup)
 

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"golang.org/x/net/idna"
 )
 
 // Options — настройки подключения, общие для обоих ядер.
@@ -16,6 +18,9 @@ type Options struct {
 	BypassLAN bool `json:"bypassLan"`
 	// DirectRU пускает домены .ru/.рф/.su мимо прокси.
 	DirectRU bool `json:"directRu"`
+	// DirectDomains — сайты из «белых списков», которые идут мимо прокси
+	// вместе с поддоменами: «wb.ru», «+.wb.ru», «избирком.рф».
+	DirectDomains []string `json:"directDomains"`
 	// IPv6 включает IPv6 внутри туннеля.
 	IPv6 bool `json:"ipv6"`
 	// LogLevel: debug, info, warning, error.
@@ -65,6 +70,63 @@ var privateCIDRs = []string{
 }
 
 var ruSuffixes = []string{"ru", "xn--p1ai", "su"}
+
+// directSuffixes — домены, которые идут напрямую вместе с поддоменами:
+// зона .ru/.рф/.su при DirectRU и сайты из белого списка. Записи чистятся от
+// префиксов Clash («+.», «*.», «DOMAIN-SUFFIX,»), схем и путей, кириллица
+// переводится в punycode, дубли отбрасываются.
+func directSuffixes(options *Options) []string {
+	var out []string
+	seen := map[string]bool{}
+	add := func(domain string) {
+		if domain != "" && !seen[domain] {
+			seen[domain] = true
+			out = append(out, domain)
+		}
+	}
+	if options.DirectRU {
+		for _, suffix := range ruSuffixes {
+			add(suffix)
+		}
+	}
+	for _, raw := range options.DirectDomains {
+		add(normalizeDomain(raw))
+	}
+	return out
+}
+
+func normalizeDomain(raw string) string {
+	domain := strings.TrimSpace(raw)
+	domain = strings.TrimLeft(domain, "-• \t")
+	domain = strings.Trim(domain, "\"'")
+	if index := strings.Index(domain, "#"); index >= 0 {
+		domain = domain[:index]
+	}
+	upper := strings.ToUpper(domain)
+	for _, prefix := range []string{"DOMAIN-SUFFIX,", "DOMAIN,", "DOMAIN:", "FULL:"} {
+		if strings.HasPrefix(upper, prefix) {
+			domain = domain[len(prefix):]
+			break
+		}
+	}
+	if index := strings.Index(domain, "://"); index >= 0 {
+		domain = domain[index+3:]
+	}
+	if index := strings.IndexAny(domain, "/?:,"); index >= 0 {
+		domain = domain[:index]
+	}
+	domain = strings.TrimSpace(domain)
+	domain = strings.TrimPrefix(domain, "+.")
+	domain = strings.TrimPrefix(domain, "*.")
+	domain = strings.Trim(strings.ToLower(domain), ".")
+	if domain == "" || strings.ContainsAny(domain, " \t") {
+		return ""
+	}
+	if ascii, err := idna.Lookup.ToASCII(domain); err == nil {
+		domain = ascii
+	}
+	return domain
+}
 
 func parseOptions(optionsJSON string) (*Options, error) {
 	options := &Options{}

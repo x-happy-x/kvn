@@ -58,7 +58,7 @@ func nodeJSON(t *testing.T, node *Node) string {
 // Конфиг xray должен проходить собственный загрузчик xray-core.
 func assertXrayAccepts(t *testing.T, node *Node) {
 	t.Helper()
-	config, err := BuildConfig(EngineXray, nodeJSON(t, node), `{"bypassLan":true,"directRu":true}`)
+	config, err := BuildConfig(EngineXray, nodeJSON(t, node), `{"bypassLan":true,"directRu":true,"directDomains":["+.wb.ru","избирком.рф"," - +.vk.com"]}`)
 	if err != nil {
 		t.Fatalf("%s: BuildConfig xray: %v", node.Name, err)
 	}
@@ -70,7 +70,7 @@ func assertXrayAccepts(t *testing.T, node *Node) {
 // Конфиг mihomo должен проходить парсер mihomo, включая разбор прокси.
 func assertMihomoAccepts(t *testing.T, node *Node) {
 	t.Helper()
-	options, _ := parseOptions(`{"bypassLan":true,"directRu":true}`)
+	options, _ := parseOptions(`{"bypassLan":true,"directRu":true,"directDomains":["+.wb.ru","избирком.рф"," - +.vk.com"]}`)
 	config, err := buildMihomoConfig(node, options, 0)
 	if err != nil {
 		t.Fatalf("%s: build mihomo: %v", node.Name, err)

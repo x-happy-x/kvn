@@ -29,6 +29,8 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
@@ -85,9 +87,12 @@ import io.kvn.client.ui.screens.AddSubscriptionSheet
 import io.kvn.client.ui.screens.AppsScreen
 import io.kvn.client.ui.screens.HomeScreen
 import io.kvn.client.ui.screens.LoginSheet
+import io.kvn.client.ui.screens.OnboardingNext
+import io.kvn.client.ui.screens.OnboardingScreen
 import io.kvn.client.ui.screens.ScanScreen
 import io.kvn.client.ui.screens.ServersScreen
 import io.kvn.client.ui.screens.SettingsScreen
+import io.kvn.client.ui.screens.WhitelistScreen
 import io.kvn.client.ui.screens.WifiScreen
 import io.kvn.client.ui.theme.KvnTheme
 import io.kvn.client.ui.theme.Palette
@@ -276,7 +281,7 @@ private enum class Tab(val title: String, val icon: ImageVector) {
 }
 
 /** Экраны, открывающиеся поверх вкладок. */
-private enum class Overlay { NONE, APPS, WIFI }
+private enum class Overlay { NONE, APPS, WIFI, WHITELIST }
 
 @Composable
 private fun App(
@@ -315,6 +320,7 @@ private fun App(
     var addEngine by rememberSaveable { mutableStateOf("") }
     var addSource by rememberSaveable { mutableStateOf("") }
     var loggingIn by rememberSaveable { mutableStateOf(false) }
+    var showIntro by rememberSaveable { mutableStateOf(false) }
     val snackbar = remember { SnackbarHostState() }
 
     LaunchedEffect(Unit) {
@@ -385,8 +391,21 @@ private fun App(
                         },
                         onMode = viewModel::setAppMode,
                         onToggle = viewModel::toggleApp,
+                        onExcludeWhitelist = viewModel::excludeWhitelistApps,
                     )
                 }
+                Overlay.WHITELIST -> WhitelistScreen(
+                    settings = settings,
+                    onBack = {
+                        overlay = Overlay.NONE
+                        viewModel.applyRouting()
+                    },
+                    onEnabled = viewModel::setWhitelistEnabled,
+                    onDirectRu = viewModel::setDirectRu,
+                    onAdd = viewModel::addWhitelistDomains,
+                    onRemove = viewModel::removeWhitelistDomain,
+                    onReset = viewModel::resetWhitelist,
+                )
                 Overlay.WIFI -> WifiScreen(
                     settings = settings,
                     hasLocation = permissions.location,
@@ -424,6 +443,7 @@ private fun App(
                             onOpenSettings = { tab = Tab.SETTINGS },
                             onOpenServers = { tab = Tab.SERVERS },
                             onAddSubscription = { adding = true },
+                            onHelp = { showIntro = true },
                         )
                         Tab.SERVERS -> ServersScreen(
                             subscriptions = subscriptions,
@@ -444,6 +464,8 @@ private fun App(
                             nodeTests = nodeTests,
                             statsVersion = statsVersion,
                             pingRecord = viewModel::pingRecord,
+                            sort = settings.serverSort,
+                            onSort = viewModel::setServerSort,
                         )
                         Tab.SCAN -> ScanScreen(
                             presets = viewModel.scanPresets,
@@ -474,6 +496,8 @@ private fun App(
                             onLogout = viewModel::subLabLogout,
                             onOpenApps = { overlay = Overlay.APPS },
                             onOpenWifi = { overlay = Overlay.WIFI },
+                            onOpenWhitelist = { overlay = Overlay.WHITELIST },
+                            onShowIntro = { showIntro = true },
                             onAddTile = onAddTile,
                             loadLogs = viewModel::logs,
                             loadConfig = viewModel::configPreview,
@@ -483,6 +507,29 @@ private fun App(
             }
             }
         }
+    }
+
+    // Вводная инструкция: сама при первом запуске, заново — кнопкой «?» на главной.
+    AnimatedVisibility(
+        visible = !settings.onboarded || showIntro,
+        enter = fadeIn(tween(300)) + slideInVertically(tween(380)) { it / 8 },
+        exit = fadeOut(tween(260)) + slideOutVertically(tween(320)) { it / 8 },
+    ) {
+        OnboardingScreen(
+            subscriptionCount = subscriptions.size,
+            initialAuto = if (settings.onboarded) settings.auto.selectBest else true,
+            initialWhitelist = settings.whitelistEnabled,
+            onFinish = { auto, whitelist, next ->
+                viewModel.finishOnboarding(auto, whitelist)
+                showIntro = false
+                tab = Tab.HOME
+                when (next) {
+                    OnboardingNext.ADD_SUBSCRIPTION -> adding = true
+                    OnboardingNext.LOGIN -> loggingIn = true
+                    OnboardingNext.NONE -> Unit
+                }
+            },
+        )
     }
 
     if (adding) {
