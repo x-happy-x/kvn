@@ -18,7 +18,16 @@ import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.viewModels
+import android.graphics.BitmapFactory
+import androidx.lifecycle.lifecycleScope
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
+import io.kvn.client.data.Qr
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
@@ -118,6 +127,42 @@ class MainActivity : ComponentActivity() {
         if (result.resultCode == RESULT_OK) viewModel.connectAfterPermission()
     }
 
+    /** Сканер QR (zxing): сам спрашивает доступ к камере. */
+    private val qrScanner = registerForActivityResult(ScanContract()) { result ->
+        result.contents?.let(::onQrText)
+    }
+
+    /** QR-код на картинке из галереи или скриншоте. */
+    private val qrImage = registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri == null) return@registerForActivityResult
+        lifecycleScope.launch {
+            val text = withContext(Dispatchers.IO) {
+                runCatching {
+                    contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it) }?.let { Qr.decode(it) }
+                }.getOrNull()
+            }
+            if (text != null) onQrText(text) else viewModel.showMessage("На картинке не нашлось QR-кода")
+        }
+    }
+
+    private fun onQrText(text: String) {
+        viewModel.importScanned(text)?.let { pendingImport.value = it.copy(client = "QR-кода") }
+    }
+
+    private fun scanQr() {
+        qrScanner.launch(
+            ScanOptions()
+                .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                .setPrompt("Наведите камеру на QR-код подписки или сервера")
+                .setBeepEnabled(false)
+                .setOrientationLocked(false),
+        )
+    }
+
+    private fun pickQrImage() {
+        qrImage.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+    }
+
     private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
     private val locationPermission = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
@@ -149,6 +194,8 @@ class MainActivity : ComponentActivity() {
                     onRequestLocation = ::requestLocation,
                     onRequestBackgroundLocation = ::requestBackgroundLocation,
                     onAddTile = ::requestAddTile,
+                    onScanQr = ::scanQr,
+                    onPickQrImage = ::pickQrImage,
                 )
             }
         }
@@ -293,6 +340,8 @@ private fun App(
     onRequestLocation: () -> Unit,
     onRequestBackgroundLocation: () -> Unit,
     onAddTile: () -> Unit,
+    onScanQr: () -> Unit,
+    onPickQrImage: () -> Unit,
 ) {
     val subscriptions by viewModel.subscriptions.collectAsStateWithLifecycle()
     val settings by viewModel.settings.collectAsStateWithLifecycle()
@@ -466,6 +515,10 @@ private fun App(
                             pingRecord = viewModel::pingRecord,
                             sort = settings.serverSort,
                             onSort = viewModel::setServerSort,
+                            onToggleEnabled = viewModel::setSubscriptionEnabled,
+                            onToggleCollapsed = viewModel::toggleCollapsed,
+                            shareLink = viewModel::shareLink,
+                            onScanQr = onScanQr,
                         )
                         Tab.SCAN -> ScanScreen(
                             presets = viewModel.scanPresets,
@@ -479,7 +532,7 @@ private fun App(
                             onRun = { viewModel.runScan() },
                             onRunOne = { viewModel.runScan(listOf(it)) },
                             onStop = viewModel::stopScan,
-                            nodes = remember(subscriptions, settings.engine) { subscriptions.flatMap { it.visibleNodes(settings.engine) } },
+                            nodes = remember(subscriptions, settings.engine) { subscriptions.filter { it.enabled }.flatMap { it.visibleNodes(settings.engine) } },
                             nodeTests = nodeTests,
                             nodeTestProgress = nodeTestProgress,
                             onTestNodes = viewModel::testAllNodes,
@@ -555,6 +608,8 @@ private fun App(
                     tab = Tab.SERVERS
                 }
             },
+            onScanQr = onScanQr,
+            onPickQrImage = onPickQrImage,
         )
     }
 

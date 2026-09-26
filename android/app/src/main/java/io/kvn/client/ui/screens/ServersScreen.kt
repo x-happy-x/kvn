@@ -7,6 +7,17 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.material.icons.rounded.ExpandMore
+import androidx.compose.material.icons.rounded.PauseCircle
+import androidx.compose.material.icons.rounded.PlayCircle
+import androidx.compose.material.icons.rounded.QrCode
+import androidx.compose.material.icons.rounded.QrCodeScanner
+import io.kvn.client.ui.components.QrShareDialog
+import io.kvn.client.ui.components.uiSpring
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -96,7 +107,16 @@ fun ServersScreen(
     pingRecord: (ServerNode) -> PingRecord? = { null },
     sort: ServerSort = ServerSort.SUBSCRIPTIONS,
     onSort: (ServerSort) -> Unit = {},
+    onToggleEnabled: (Subscription, Boolean) -> Unit = { _, _ -> },
+    onToggleCollapsed: (Subscription) -> Unit = {},
+    shareLink: (ServerNode) -> String? = { null },
+    onScanQr: () -> Unit = {},
 ) {
+    // Что показываем QR-кодом: заголовок и ссылка.
+    var sharing by remember { mutableStateOf<Pair<String, String>?>(null) }
+    val shareNode: (ServerNode) -> Unit = { node -> shareLink(node)?.let { sharing = node.name to it } }
+    sharing?.let { (title, link) -> QrShareDialog(title, link) { sharing = null } }
+
     Column(Modifier.fillMaxSize()) {
         Text(
             "Серверы",
@@ -115,10 +135,11 @@ fun ServersScreen(
             ActionButton(Icons.Rounded.NetworkCheck, if (pinging) "Пингую…" else "Пинг всех", busy = pinging, onClick = onPingAll)
             ActionButton(Icons.Rounded.Bolt, "Выбрать лучший", onClick = onFastest)
             ActionButton(Icons.Rounded.Refresh, if (refreshing) "Обновляю…" else "Обновить подписки", busy = refreshing, onClick = onRefreshAll)
+            ActionButton(Icons.Rounded.QrCodeScanner, "Сканировать QR", onClick = onScanQr)
             ActionButton(Icons.Rounded.Add, "Добавить", accent = true, onClick = onAdd)
         }
         Text(
-            "«Пинг всех» проверяет доступность серверов, «Выбрать лучший» — берёт самый надёжный и быстрый по истории проверок.",
+            "«Пинг всех» проверяет доступность серверов, «Выбрать лучший» — берёт самый надёжный и быстрый по истории проверок. Долгое нажатие на сервер — поделиться им по QR.",
             color = Palette.TextMuted,
             fontSize = 11.sp,
             modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 6.dp, bottom = 4.dp),
@@ -135,7 +156,7 @@ fun ServersScreen(
             if (sort == ServerSort.SUBSCRIPTIONS) {
                 emptyList()
             } else {
-                val all = subscriptions.flatMap { subscription ->
+                val all = subscriptions.filter { it.enabled }.flatMap { subscription ->
                     subscription.visibleNodes(engine).map { node -> Triple(node, subscription, pingRecord(node)) }
                 }
                 when (sort) {
@@ -180,6 +201,7 @@ fun ServersScreen(
                         test = nodeTests[node.id],
                         caption = subscription.name,
                         onClick = { onSelect(node) },
+                        onLongClick = { shareNode(node) },
                     )
                 }
                 return@LazyColumn
@@ -187,9 +209,15 @@ fun ServersScreen(
             subscriptions.forEach { subscription ->
                 item(key = "header-${subscription.id}") {
                   Box(Modifier.animateItem()) {
-                    SubscriptionHeader(subscription, engine, onRefresh, onRename, onDelete, onSetEngine)
+                    SubscriptionHeader(
+                        subscription, engine, onRefresh, onRename, onDelete, onSetEngine,
+                        onToggleEnabled = onToggleEnabled,
+                        onToggleCollapsed = onToggleCollapsed,
+                        onShare = { sharing = subscription.name to subscription.url },
+                    )
                   }
                 }
+                if (subscription.collapsed) return@forEach
                 items(subscription.visibleNodes(engine), key = { it.id }) { node ->
                     // statsVersion — ключ перечитывания статистики после новой серии пингов.
                     val record = remember(node.id, statsVersion) { pingRecord(node) }
@@ -201,7 +229,9 @@ fun ServersScreen(
                         ping = pings[node.id],
                         record = record,
                         test = nodeTests[node.id],
-                        onClick = { onSelect(node) },
+                        disabled = !subscription.enabled,
+                        onClick = { if (subscription.enabled) onSelect(node) else onToggleEnabled(subscription, true) },
+                        onLongClick = { shareNode(node) },
                     )
                 }
             }
@@ -277,8 +307,12 @@ private fun SubscriptionHeader(
     onRename: (Subscription, String) -> Unit,
     onDelete: (Subscription) -> Unit,
     onSetEngine: (Subscription, Engine?) -> Unit,
+    onToggleEnabled: (Subscription, Boolean) -> Unit,
+    onToggleCollapsed: (Subscription) -> Unit,
+    onShare: () -> Unit,
 ) {
     var menu by remember { mutableStateOf(false) }
+    val arrow by animateFloatAsState(if (subscription.collapsed) -90f else 0f, uiSpring(), label = "arrow")
     var choosingEngine by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
@@ -286,12 +320,26 @@ private fun SubscriptionHeader(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = 4.dp, top = 14.dp, bottom = 2.dp),
+            .padding(top = 10.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .clickable { onToggleCollapsed(subscription) }
+            .padding(start = 4.dp, top = 4.dp, bottom = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        // Стрелка поворачивается при сворачивании.
+        Icon(
+            Icons.Rounded.ExpandMore,
+            contentDescription = if (subscription.collapsed) "Развернуть" else "Свернуть",
+            tint = Palette.TextMuted,
+            modifier = Modifier
+                .size(20.dp)
+                .graphicsLayer { rotationZ = arrow },
+        )
+        Spacer(Modifier.width(6.dp))
         Column(Modifier.weight(1f)) {
             Text(
                 subscription.name,
+                color = if (subscription.enabled) Palette.TextPrimary else Palette.TextMuted,
                 fontSize = 15.sp,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
@@ -299,6 +347,7 @@ private fun SubscriptionHeader(
             )
             val count = subscription.visibleNodes(engine).size.toLong()
             val details = buildList {
+                if (!subscription.enabled) add("выключена")
                 subscription.engine?.let { add("ядро ${it.title}") }
                 if (subscription.borrowsNodes(engine)) add("серверы прошлого ядра")
                 if (subscription.source == SubscriptionSource.SUBLAB) add("sub-lab")
@@ -326,6 +375,24 @@ private fun SubscriptionHeader(
                         onClick = {
                             menu = false
                             onRefresh(subscription)
+                        },
+                    )
+                }
+                DropdownMenuItem(
+                    text = { Text(if (subscription.enabled) "Выключить на время" else "Включить") },
+                    leadingIcon = { Icon(if (subscription.enabled) Icons.Rounded.PauseCircle else Icons.Rounded.PlayCircle, null) },
+                    onClick = {
+                        menu = false
+                        onToggleEnabled(subscription, !subscription.enabled)
+                    },
+                )
+                if (subscription.url.isNotEmpty()) {
+                    DropdownMenuItem(
+                        text = { Text("Поделиться по QR") },
+                        leadingIcon = { Icon(Icons.Rounded.QrCode, null) },
+                        onClick = {
+                            menu = false
+                            onShare()
                         },
                     )
                 }
@@ -425,6 +492,7 @@ private fun SubscriptionHeader(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ServerRow(
     modifier: Modifier = Modifier,
@@ -435,9 +503,11 @@ private fun ServerRow(
     record: PingRecord?,
     test: NodeTest?,
     caption: String? = null,
+    disabled: Boolean = false,
     onClick: () -> Unit,
+    onLongClick: () -> Unit = {},
 ) {
-    val supported = node.supports(engine)
+    val supported = node.supports(engine) && !disabled
     val shape = RoundedCornerShape(18.dp)
     val borderColor by animateColorAsState(if (selected) Palette.Violet else Palette.Stroke, tween(300), label = "border")
     val background by animateColorAsState(if (selected) Palette.SurfaceHigh else Palette.Surface, tween(300), label = "bg")
@@ -447,7 +517,8 @@ private fun ServerRow(
             .clip(shape)
             .background(background)
             .border(1.dp, borderColor, shape)
-            .pressable(onClick = onClick)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+            .graphicsLayer { alpha = if (disabled) 0.55f else 1f }
             .padding(horizontal = 14.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

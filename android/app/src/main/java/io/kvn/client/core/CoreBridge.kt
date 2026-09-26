@@ -62,6 +62,9 @@ object CoreBridge {
     /** happ://crypt5/… → обычная ссылка. */
     fun decryptHapp(link: String): String = Libcore.decryptHapp(link)
 
+    /** Ссылка сервера (vless://, vmess://…) для QR-кода и «поделиться». */
+    fun shareLink(nodeJson: String): String = Libcore.shareLink(nodeJson)
+
     fun xrayVersion(): String = Libcore.xrayVersion()
 
     fun mihomoVersion(): String = Libcore.mihomoVersion()

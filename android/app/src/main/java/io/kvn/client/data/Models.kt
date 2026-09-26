@@ -97,6 +97,10 @@ data class Subscription(
     val nodesXray: List<ServerNode> = emptyList(),
     val nodesMihomo: List<ServerNode> = emptyList(),
     val error: String? = null,
+    /** Выключенная подписка остаётся в списке, но не пингуется, не проверяется и не выбирается. */
+    val enabled: Boolean = true,
+    /** Свёрнута на экране серверов. */
+    val collapsed: Boolean = false,
 ) {
     val used: Long get() = upload + download
 
@@ -145,6 +149,8 @@ data class Subscription(
         put("announce", announce)
         engine?.let { put("engine", it.id) }
         error?.let { put("error", it) }
+        put("enabled", enabled)
+        put("collapsed", collapsed)
         put("nodesXray", JSONArray().apply { nodesXray.forEach { put(JSONObject(it.json)) } })
         put("nodesMihomo", JSONArray().apply { nodesMihomo.forEach { put(JSONObject(it.json)) } })
     }
@@ -176,6 +182,8 @@ data class Subscription(
                 nodesXray = json.optJSONArray("nodesXray")?.let { ServerNode.listFromJson(id, it) } ?: legacy,
                 nodesMihomo = json.optJSONArray("nodesMihomo")?.let { ServerNode.listFromJson(id, it) } ?: legacy,
                 error = json.optString("error").ifEmpty { null },
+                enabled = json.optBoolean("enabled", true),
+                collapsed = json.optBoolean("collapsed", false),
             )
         }
     }

@@ -226,3 +226,23 @@ func TestDirectSuffixes(t *testing.T) {
 		t.Fatalf("с DirectRU: %v", suffixes)
 	}
 }
+
+// Ссылка сервера должна разбираться обратно в тот же сервер.
+func TestShareLinkRoundTrip(t *testing.T) {
+	nodes := parse(t, shareLinks)
+	for _, node := range nodes {
+		payload, _ := json.Marshal(node)
+		link, err := ShareLink(string(payload))
+		if err != nil {
+			t.Logf("%s: %v", node.Name, err)
+			continue
+		}
+		back := parse(t, link)
+		if len(back) != 1 || back[0].Server != node.Server || back[0].Port != node.Port || back[0].Type != node.Type || back[0].Name != node.Name {
+			t.Fatalf("%s: %s → %+v", node.Name, link, back)
+		}
+		if (back[0].Xray != nil) != (node.Xray != nil) {
+			t.Fatalf("%s: поддержка xray потерялась: %s", node.Name, link)
+		}
+	}
+}

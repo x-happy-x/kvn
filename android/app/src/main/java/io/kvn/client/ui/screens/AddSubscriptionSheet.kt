@@ -38,6 +38,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.kvn.client.core.Engine
 import io.kvn.client.ui.components.ErrorBanner
+import androidx.compose.material.icons.rounded.Image
+import androidx.compose.material.icons.rounded.QrCodeScanner
 import io.kvn.client.ui.theme.Palette
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -51,12 +53,15 @@ fun AddSubscriptionSheet(
     error: String? = null,
     onDismiss: () -> Unit,
     onSubmit: (input: String, name: String, engine: Engine?) -> Unit,
+    onScanQr: () -> Unit = {},
+    onPickQrImage: () -> Unit = {},
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val clipboard = LocalClipboardManager.current
-    var input by remember { mutableStateOf(initialUrl) }
-    var name by remember { mutableStateOf(initialName) }
-    var engine by remember { mutableStateOf(initialEngine) }
+    // Ключ — чтобы результат сканирования QR подставлялся в уже открытое окно.
+    var input by remember(initialUrl) { mutableStateOf(initialUrl) }
+    var name by remember(initialUrl) { mutableStateOf(initialName) }
+    var engine by remember(initialUrl) { mutableStateOf(initialEngine) }
     val fieldColors = OutlinedTextFieldDefaults.colors(
         focusedBorderColor = Palette.Violet,
         unfocusedBorderColor = Palette.Stroke,
@@ -129,7 +134,28 @@ fun AddSubscriptionSheet(
                 fontSize = 12.sp,
             )
             ErrorBanner(error)
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(12.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedButton(
+                    onClick = onScanQr,
+                    modifier = Modifier.weight(1f).height(48.dp),
+                    shape = RoundedCornerShape(14.dp),
+                ) {
+                    Icon(Icons.Rounded.QrCodeScanner, null, modifier = Modifier.size(18.dp), tint = Palette.TextSecondary)
+                    Spacer(Modifier.size(8.dp))
+                    Text("Камера", color = Palette.TextPrimary)
+                }
+                OutlinedButton(
+                    onClick = onPickQrImage,
+                    modifier = Modifier.weight(1f).height(48.dp),
+                    shape = RoundedCornerShape(14.dp),
+                ) {
+                    Icon(Icons.Rounded.Image, null, modifier = Modifier.size(18.dp), tint = Palette.TextSecondary)
+                    Spacer(Modifier.size(8.dp))
+                    Text("QR из фото", color = Palette.TextPrimary)
+                }
+            }
+            Spacer(Modifier.height(10.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedButton(
                     onClick = { clipboard.getText()?.text?.let { input = it.trim() } },

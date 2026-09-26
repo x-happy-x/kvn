@@ -315,6 +315,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun delete(subscription: Subscription) = repository.delete(subscription.id)
 
+    fun setSubscriptionEnabled(subscription: Subscription, enabled: Boolean) {
+        repository.setEnabled(subscription.id, enabled)
+        _messages.tryEmit(if (enabled) "«${subscription.name}» включена" else "«${subscription.name}» выключена — её серверы не пингуются и не выбираются")
+        if (!enabled) restartIfActive()
+    }
+
+    fun toggleCollapsed(subscription: Subscription) = repository.setCollapsed(subscription.id, !subscription.collapsed)
+
+    /** Ссылка сервера для QR или null с сообщением, если протокол не выражается ссылкой. */
+    fun shareLink(node: ServerNode): String? = runCatching { CoreBridge.shareLink(node.json) }
+        .getOrElse {
+            _messages.tryEmit(it.message ?: "Не удалось собрать ссылку")
+            null
+        }
+
+    /** Текст с QR-кода: ссылку клиента раскрываем, остальное добавляем как есть. */
+    fun importScanned(text: String): ImportRequest? {
+        val value = text.trim()
+        if (value.isEmpty()) return null
+        return parseImport(value) ?: ImportRequest(input = value, name = null, engine = null, client = "QR-кода")
+    }
+
     @OptIn(ExperimentalCoroutinesApi::class)
     fun pingAll() {
         if (_pinging.value) return

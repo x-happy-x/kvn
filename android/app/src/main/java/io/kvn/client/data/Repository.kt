@@ -31,7 +31,8 @@ class Repository(private val context: Context) {
     val settings: StateFlow<AppSettings> = _settings.asStateFlow()
 
     /** Серверы, видимые при текущем ядре (у подписок с закреплённым ядром — его серверы). */
-    val allNodes: List<ServerNode> get() = _subscriptions.value.flatMap { it.visibleNodes(_settings.value.engine) }
+    /** Серверы включённых подписок: только они пингуются, проверяются и выбираются. */
+    val allNodes: List<ServerNode> get() = _subscriptions.value.filter { it.enabled }.flatMap { it.visibleNodes(_settings.value.engine) }
 
     /** Ядро, на котором работает сервер: закреплённое за его подпиской или текущее. */
     fun engineFor(node: ServerNode): Engine =
@@ -98,7 +99,7 @@ class Repository(private val context: Context) {
         }
 
     suspend fun refreshAll() {
-        _subscriptions.value.filter { it.remote }.forEach { refresh(it.id) }
+        _subscriptions.value.filter { it.remote && it.enabled }.forEach { refresh(it.id) }
     }
 
     /**
@@ -126,6 +127,20 @@ class Repository(private val context: Context) {
 
     fun rename(subscriptionId: String, name: String) {
         _subscriptions.update { list -> list.map { if (it.id == subscriptionId) it.copy(name = name) else it } }
+        persist()
+    }
+
+    /** Временно выключает подписку, не удаляя её; выбранный сервер уходит на включённую. */
+    fun setEnabled(subscriptionId: String, enabled: Boolean) {
+        _subscriptions.update { list -> list.map { if (it.id == subscriptionId) it.copy(enabled = enabled) else it } }
+        persist()
+        if (!enabled && _settings.value.selectedNodeId?.startsWith("$subscriptionId/") == true) {
+            updateSettings { it.copy(selectedNodeId = allNodes.firstOrNull()?.id) }
+        }
+    }
+
+    fun setCollapsed(subscriptionId: String, collapsed: Boolean) {
+        _subscriptions.update { list -> list.map { if (it.id == subscriptionId) it.copy(collapsed = collapsed) else it } }
         persist()
     }
 
