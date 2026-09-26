@@ -16,7 +16,8 @@ import (
 // CheckConnection проверяет, что работающий VPN действительно пропускает
 // трафик: открывает testURL через прокси запущенного ядра. Возвращает время
 // ответа в мс. Нужна для периодической проверки и автопереключения сервера.
-func CheckConnection(testURL string, timeoutMs int32) (int32, error) {
+// method — GET или HEAD (пусто — GET).
+func CheckConnection(method string, testURL string, timeoutMs int32) (int32, error) {
 	mu.Lock()
 	current := active
 	mu.Unlock()
@@ -31,7 +32,7 @@ func CheckConnection(testURL string, timeoutMs int32) (int32, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutMs)*time.Millisecond)
 	defer cancel()
-	status, elapsed, err := fetchThrough(ctx, current.DialProxy, testURL)
+	status, elapsed, err := fetchThrough(ctx, current.DialProxy, strings.ToUpper(method), testURL)
 	if err != nil {
 		return 0, shortNetErr(err)
 	}

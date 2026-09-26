@@ -5,7 +5,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
@@ -79,5 +81,9 @@ private val shapes = Shapes(
 
 @Composable
 fun KvnTheme(content: @Composable () -> Unit) {
-    MaterialTheme(colorScheme = colors, typography = typography, shapes = shapes, content = content)
+    // Светлый текст по умолчанию и вне Scaffold/Surface (вводная инструкция,
+    // экраны поверх вкладок): иначе Compose рисует Text чёрным.
+    MaterialTheme(colorScheme = colors, typography = typography, shapes = shapes) {
+        CompositionLocalProvider(LocalContentColor provides Palette.TextPrimary, content = content)
+    }
 }

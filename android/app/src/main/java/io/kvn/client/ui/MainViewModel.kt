@@ -19,6 +19,9 @@ import io.kvn.client.data.ImportRequest
 import io.kvn.client.data.NodeTest
 import io.kvn.client.data.PingRecord
 import io.kvn.client.data.PingStats
+import io.kvn.client.data.Pinger
+import io.kvn.client.data.DNS_PRESETS
+import io.kvn.client.data.DnsCheck
 import io.kvn.client.data.ScanPreset
 import io.kvn.client.data.ScanResult
 import io.kvn.client.data.ServerNode
@@ -345,12 +348,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             _pinging.value = true
             _pings.value = emptyMap()
-            val limited = Dispatchers.IO.limitedParallelism(8)
+            val current = settings.value
+            // Через прокси каждый пинг поднимает отдельное ядро — параллельно меньше.
+            val limited = Dispatchers.IO.limitedParallelism(if (current.checks.pingMethod.throughProxy) 4 else 8)
             // Сначала те, что чаще работают и отвечают быстрее: их результат виден сразу.
             pingStats.order(nodes).map { node ->
                 launch(limited) {
-                    val ms = if (node.server.isEmpty() || node.port <= 0) -1 else CoreBridge.tcpPing(node.server, node.port)
-                    if (node.server.isNotEmpty()) pingStats.record(node, ms > 0, ms)
+                    val ms = Pinger.ping(node, repository.engineFor(node), current).let { if (it == 0) -1 else it }
+                    if (node.server.isNotEmpty() || current.checks.pingMethod.throughProxy) pingStats.record(node, ms > 0, ms)
                     _pings.update { it + (node.id to ms) }
                 }
             }.forEach { it.join() }
@@ -502,6 +507,39 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun resetWhitelist() = updateSettings(restart = false) { it.copy(whitelistDomains = Whitelist.DEFAULT_DOMAINS) }
 
+    // ---------- DNS ----------
+
+    private val _dnsChecks = MutableStateFlow<Map<String, DnsCheck>>(emptyMap())
+    /** Результаты проверки DNS: ключ — «адрес» или «адрес|vpn». */
+    val dnsChecks: StateFlow<Map<String, DnsCheck>> = _dnsChecks.asStateFlow()
+
+    private val _dnsChecking = MutableStateFlow(false)
+    val dnsChecking: StateFlow<Boolean> = _dnsChecking.asStateFlow()
+
+    /** Проверяет готовые DNS и выбранный: напрямую и, если VPN подключён, через него. */
+    fun checkDnsServers() {
+        if (_dnsChecking.value) return
+        val servers = (DNS_PRESETS.map { it.address } + settings.value.dns).distinct()
+        val viaVpn = vpnState.value is VpnState.Connected
+        val domain = settings.value.checks.dnsDomain
+        viewModelScope.launch {
+            _dnsChecking.value = true
+            _dnsChecks.value = emptyMap()
+            servers.map { server ->
+                launch(Dispatchers.IO) {
+                    _dnsChecks.update { it + (server to DnsCheck.run(server, domain, false)) }
+                    if (viaVpn) _dnsChecks.update { it + ("$server|vpn" to DnsCheck.run(server, domain, true)) }
+                }
+            }.forEach { it.join() }
+            _dnsChecking.value = false
+        }
+    }
+
+    fun setDns(server: String) = updateSettings { it.copy(dns = server.trim()) }
+
+    fun updateChecks(transform: (io.kvn.client.data.CheckOptions) -> io.kvn.client.data.CheckOptions) =
+        updateSettings(restart = false) { it.copy(checks = transform(it.checks)) }
+
     // ---------- вводная инструкция и вид ----------
 
     fun finishOnboarding(auto: Boolean, whitelist: Boolean) = updateSettings {
@@ -603,7 +641,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     val result = if (!node.supports(engine)) {
                         NodeTest.failed("не работает на ${engine.title}")
                     } else {
-                        runCatching { NodeTest.fromJson(JSONObject(CoreBridge.testNode(engine, node.json, options))) }
+                        runCatching { NodeTest.fromJson(JSONObject(CoreBridge.testNode(engine, node.json, options, settings.value.checks.testUrl, settings.value.checks.testTimeoutMs))) }
                             .getOrElse { NodeTest.failed(it.message ?: "ошибка проверки") }
                     }
                     if (result.verdict != "error") pingStats.record(node, result.ok, result.ms)

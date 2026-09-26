@@ -38,6 +38,9 @@ import androidx.compose.material.icons.rounded.Lan
 import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.Memory
 import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.rounded.NetworkCheck
+import androidx.compose.material.icons.rounded.Link
+import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.School
 import androidx.compose.material.icons.rounded.Sync
 import androidx.compose.material.icons.rounded.Tune
@@ -78,6 +81,8 @@ import io.kvn.client.data.AppMode
 import io.kvn.client.data.AppSettings
 import io.kvn.client.data.AutoOptions
 import io.kvn.client.data.BypassOptions
+import io.kvn.client.data.CheckOptions
+import io.kvn.client.data.PingMethod
 import io.kvn.client.data.Mimicry
 import io.kvn.client.data.WifiMode
 import io.kvn.client.ui.components.EngineSwitch
@@ -101,6 +106,8 @@ fun SettingsScreen(
     onOpenWifi: () -> Unit,
     onOpenWhitelist: () -> Unit = {},
     onShowIntro: () -> Unit = {},
+    onOpenDns: () -> Unit = {},
+    onChecks: ((CheckOptions) -> CheckOptions) -> Unit = {},
     onAddTile: (() -> Unit)?,
     loadLogs: suspend () -> String,
     loadConfig: suspend () -> String,
@@ -213,7 +220,7 @@ fun SettingsScreen(
 
             SectionTitle("Сеть")
             Panel(Modifier.fillMaxWidth()) {
-                ValueRow(Icons.Rounded.Dns, "DNS", settings.dns) { editing = EditField.DNS }
+                ValueRow(Icons.Rounded.Dns, "DNS", settings.dns, onOpenDns)
                 Divider()
                 ValueRow(Icons.Rounded.Person, "User-Agent для Xray", Mimicry.userAgent(Engine.XRAY, settings)) { editing = EditField.UA_XRAY }
                 Divider()
@@ -628,4 +635,171 @@ private fun AutoPanel(auto: AutoOptions, onChange: ((AutoOptions) -> AutoOptions
             confirmButton = { TextButton(onClick = { picking = null }) { Text("Закрыть") } },
         )
     }
+}
+
+/** Что правится в диалоге панели проверок. */
+private enum class CheckField { PING_METHOD, PING_TIMEOUT, URLS, TEST_TIMEOUT, DELAY, RETRY, DNS_DOMAIN }
+
+/**
+ * Пинг и проверки: способ пинга (как в Happ), адреса и метод проверки,
+ * таймауты, проверка после подключения, повтор и проверка DNS через VPN.
+ */
+@Composable
+private fun ChecksPanel(checks: CheckOptions, onChange: ((CheckOptions) -> CheckOptions) -> Unit) {
+    var editing by remember { mutableStateOf<CheckField?>(null) }
+    Panel(Modifier.fillMaxWidth()) {
+        ValueRow(Icons.Rounded.NetworkCheck, "Способ пинга", checks.pingMethod.title) { editing = CheckField.PING_METHOD }
+        ParamRow("Таймаут пинга", "${checks.pingTimeoutMs / 1000.0} с") { editing = CheckField.PING_TIMEOUT }
+        Divider()
+        ValueRow(Icons.Rounded.Link, "Адреса проверки", checks.testUrls.joinToString(", ") { it.substringAfter("://").substringBefore('/') }) {
+            editing = CheckField.URLS
+        }
+        ParamRow("Метод запроса", checks.testMethod) {
+            onChange { it.copy(testMethod = if (it.testMethod == "GET") "HEAD" else "GET") }
+        }
+        ParamRow("Таймаут проверки", "${checks.testTimeoutMs / 1000} с") { editing = CheckField.TEST_TIMEOUT }
+        Divider()
+        ToggleRow(
+            Icons.Rounded.Bolt,
+            "Проверка после подключения",
+            "Убедиться, что сайты открываются, сразу после включения VPN",
+            checks.afterConnect,
+        ) { value -> onChange { it.copy(afterConnect = value) } }
+        if (checks.afterConnect) {
+            ParamRow("Через", "${checks.afterConnectDelaySec} с") { editing = CheckField.DELAY }
+        }
+        ParamRow("Повтор после неудачи", "через ${checks.retrySeconds} с") { editing = CheckField.RETRY }
+        Divider()
+        ToggleRow(
+            Icons.Rounded.Dns,
+            "Проверять DNS",
+            "При проверке соединения спрашивать выбранный DNS через VPN",
+            checks.dnsCheck,
+        ) { value -> onChange { it.copy(dnsCheck = value) } }
+        if (checks.dnsCheck) {
+            ParamRow("Домен для проверки", checks.dnsDomain) { editing = CheckField.DNS_DOMAIN }
+        }
+    }
+
+    when (editing) {
+        CheckField.PING_METHOD -> AlertDialog(
+            onDismissRequest = { editing = null },
+            containerColor = Palette.SurfaceHigh,
+            title = { Text("Способ пинга") },
+            text = {
+                Column {
+                    PingMethod.entries.forEach { method ->
+                        Column(
+                            Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .clickable {
+                                    editing = null
+                                    onChange { it.copy(pingMethod = method) }
+                                }
+                                .padding(vertical = 8.dp, horizontal = 4.dp),
+                        ) {
+                            Text(
+                                method.title,
+                                fontWeight = FontWeight.SemiBold,
+                                color = if (method == checks.pingMethod) Palette.VioletSoft else Palette.TextPrimary,
+                            )
+                            Text(method.description, color = Palette.TextSecondary, fontSize = 12.sp)
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { editing = null }) { Text("Закрыть") } },
+        )
+        CheckField.PING_TIMEOUT -> ChoiceDialog("Таймаут пинга", listOf(1000, 2000, 3000, 5000, 8000), checks.pingTimeoutMs, { "${it / 1000.0} с" }, { editing = null }) { v ->
+            onChange { it.copy(pingTimeoutMs = v) }
+        }
+        CheckField.TEST_TIMEOUT -> ChoiceDialog("Таймаут проверки", listOf(3000, 5000, 8000, 10_000, 15_000, 20_000), checks.testTimeoutMs, { "${it / 1000} с" }, { editing = null }) { v ->
+            onChange { it.copy(testTimeoutMs = v) }
+        }
+        CheckField.DELAY -> ChoiceDialog("Проверить через", listOf(2, 5, 10, 20, 30), checks.afterConnectDelaySec, { "$it с" }, { editing = null }) { v ->
+            onChange { it.copy(afterConnectDelaySec = v) }
+        }
+        CheckField.RETRY -> ChoiceDialog("Повтор после неудачи", listOf(5, 10, 20, 30, 60), checks.retrySeconds, { "через $it с" }, { editing = null }) { v ->
+            onChange { it.copy(retrySeconds = v) }
+        }
+        CheckField.URLS -> TextEditDialog(
+            title = "Адреса проверки",
+            hint = "По одному на строку. Соединение рабочее, если открылся хоть один. Лучше адреса с ответом 204: они почти без трафика.",
+            initial = checks.testUrls.joinToString("\n"),
+            singleLine = false,
+            onDismiss = { editing = null },
+            onReset = { onChange { it.copy(testUrls = CheckOptions.DEFAULT_TEST_URLS) } },
+        ) { text ->
+            val urls = text.lines().map { it.trim() }.filter { it.startsWith("http://") || it.startsWith("https://") }
+            if (urls.isNotEmpty()) onChange { it.copy(testUrls = urls) }
+        }
+        CheckField.DNS_DOMAIN -> TextEditDialog(
+            title = "Домен для проверки DNS",
+            hint = "Адрес, который спрашиваем у DNS, например google.com",
+            initial = checks.dnsDomain,
+            singleLine = true,
+            onDismiss = { editing = null },
+            onReset = { onChange { it.copy(dnsDomain = CheckOptions().dnsDomain) } },
+        ) { text -> if (text.isNotBlank()) onChange { it.copy(dnsDomain = text.trim()) } }
+        null -> Unit
+    }
+}
+
+@Composable
+private fun <T> ChoiceDialog(title: String, options: List<T>, current: T, label: (T) -> String, onDismiss: () -> Unit, onPick: (T) -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Palette.SurfaceHigh,
+        title = { Text(title) },
+        text = {
+            Column {
+                options.forEach { option ->
+                    TextButton(onClick = {
+                        onDismiss()
+                        onPick(option)
+                    }) {
+                        Text(label(option), color = if (option == current) Palette.VioletSoft else Palette.TextPrimary)
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Закрыть") } },
+    )
+}
+
+@Composable
+private fun TextEditDialog(
+    title: String,
+    hint: String,
+    initial: String,
+    singleLine: Boolean,
+    onDismiss: () -> Unit,
+    onReset: () -> Unit,
+    onSave: (String) -> Unit,
+) {
+    var value by remember { mutableStateOf(initial) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Palette.SurfaceHigh,
+        title = { Text(title) },
+        text = {
+            Column {
+                Text(hint, color = Palette.TextSecondary, fontSize = 13.sp)
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(value = value, onValueChange = { value = it }, singleLine = singleLine, maxLines = if (singleLine) 1 else 6)
+                TextButton(onClick = {
+                    onDismiss()
+                    onReset()
+                }) { Text("По умолчанию") }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                onDismiss()
+                onSave(value)
+            }) { Text("Сохранить") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Отмена") } },
+    )
 }

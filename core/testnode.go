@@ -81,7 +81,7 @@ func testNode(engineName string, node *Node, options *Options, testURL string, t
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	status, elapsed, err := fetchThrough(ctx, dial, testURL)
+	status, elapsed, err := fetchThrough(ctx, dial, http.MethodGet, testURL)
 	switch {
 	case err == nil && status > 0 && status < 500:
 		result.OK, result.Status, result.MS, result.Verdict = true, status, int(elapsed/time.Millisecond), "ok"
@@ -150,8 +150,8 @@ func standaloneDialer(engineName string, node *Node, options *Options) (proxyDia
 	return nil, nil, fmt.Errorf("неизвестное ядро %q", engineName)
 }
 
-// fetchThrough открывает URL через dial и возвращает код ответа и время до заголовков.
-func fetchThrough(ctx context.Context, dial proxyDialer, testURL string) (int, time.Duration, error) {
+// fetchThrough открывает URL через dial методом GET или HEAD и возвращает код ответа и время до заголовков.
+func fetchThrough(ctx context.Context, dial proxyDialer, method string, testURL string) (int, time.Duration, error) {
 	transport := &http.Transport{
 		DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
 			host, portText, err := net.SplitHostPort(addr)
@@ -165,7 +165,10 @@ func fetchThrough(ctx context.Context, dial proxyDialer, testURL string) (int, t
 		TLSHandshakeTimeout: 8 * time.Second,
 	}
 	defer transport.CloseIdleConnections()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, testURL, nil)
+	if method == "" {
+		method = http.MethodGet
+	}
+	req, err := http.NewRequestWithContext(ctx, method, testURL, nil)
 	if err != nil {
 		return 0, 0, err
 	}

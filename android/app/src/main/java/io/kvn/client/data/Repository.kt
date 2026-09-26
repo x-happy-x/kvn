@@ -329,6 +329,20 @@ class Repository(private val context: Context) {
             onboarded = prefs.getBoolean("onboarded", false),
             serverSort = ServerSort.of(prefs.getString("serverSort", null)),
             advanced = prefs.getBoolean("advanced", false),
+            checks = CheckOptions().let { d ->
+                CheckOptions(
+                    pingMethod = PingMethod.of(prefs.getString("pingMethod", null)),
+                    pingTimeoutMs = prefs.getInt("pingTimeoutMs", d.pingTimeoutMs),
+                    testUrls = prefs.getString("testUrls", null)?.split('\n')?.filter { it.isNotBlank() }?.ifEmpty { null } ?: d.testUrls,
+                    testMethod = prefs.getString("testMethod", null) ?: d.testMethod,
+                    testTimeoutMs = prefs.getInt("testTimeoutMs", d.testTimeoutMs),
+                    afterConnect = prefs.getBoolean("checkAfterConnect", d.afterConnect),
+                    afterConnectDelaySec = prefs.getInt("checkAfterConnectDelay", d.afterConnectDelaySec),
+                    retrySeconds = prefs.getInt("checkRetrySeconds", d.retrySeconds),
+                    dnsCheck = prefs.getBoolean("dnsCheck", d.dnsCheck),
+                    dnsDomain = prefs.getString("dnsDomain", null) ?: d.dnsDomain,
+                )
+            },
         )
     }
 
@@ -375,6 +389,16 @@ class Repository(private val context: Context) {
             .putBoolean("onboarded", settings.onboarded)
             .putString("serverSort", settings.serverSort.id)
             .putBoolean("advanced", settings.advanced)
+            .putString("pingMethod", settings.checks.pingMethod.id)
+            .putInt("pingTimeoutMs", settings.checks.pingTimeoutMs)
+            .putString("testUrls", settings.checks.testUrls.joinToString("\n"))
+            .putString("testMethod", settings.checks.testMethod)
+            .putInt("testTimeoutMs", settings.checks.testTimeoutMs)
+            .putBoolean("checkAfterConnect", settings.checks.afterConnect)
+            .putInt("checkAfterConnectDelay", settings.checks.afterConnectDelaySec)
+            .putInt("checkRetrySeconds", settings.checks.retrySeconds)
+            .putBoolean("dnsCheck", settings.checks.dnsCheck)
+            .putString("dnsDomain", settings.checks.dnsDomain)
             .apply()
     }
 }

@@ -18,6 +18,7 @@ import io.kvn.client.R
 import io.kvn.client.core.CoreBridge
 import io.kvn.client.data.AppMode
 import io.kvn.client.data.AppSettings
+import io.kvn.client.data.DnsCheck
 import io.kvn.client.data.WifiMode
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -202,27 +203,43 @@ class KvnVpnService : VpnService() {
      * неудачи перепроверяет чаще; если сервер не ответил заданное число раз
      * подряд — ищет другой рабочий сервер и переключается на него.
      */
+    /**
+     * Контроль соединения: проверка вскоре после подключения и затем каждые
+     * N минут. Проверка — открыть адреса проверки через VPN (хватит одного) и,
+     * если включено, получить ответ выбранного DNS через туннель.
+     */
     private fun startHealthLoop() {
         healthJob?.cancel()
-        val auto = KvnApp.instance.repository.settings.value.auto
-        if (!auto.healthCheck) return
+        val settings = KvnApp.instance.repository.settings.value
+        val auto = settings.auto
+        val checks = settings.checks
+        if (!auto.healthCheck && !checks.afterConnect) return
         healthJob = scope.launch {
             var failures = 0
+            var first = true
             while (isActive) {
-                delay(if (failures == 0) auto.intervalMinutes.coerceAtLeast(1) * 60_000L else RETRY_AFTER_FAILURE_MS)
+                val wait = when {
+                    failures > 0 -> checks.retrySeconds.coerceAtLeast(5) * 1000L
+                    first && checks.afterConnect -> checks.afterConnectDelaySec.coerceAtLeast(1) * 1000L
+                    else -> auto.intervalMinutes.coerceAtLeast(1) * 60_000L
+                }
+                first = false
+                delay(wait)
                 if (VpnController.state.value !is VpnState.Connected) return@launch
-                val ok = runCatching { CoreBridge.checkConnection(timeoutMs = 10_000) }
-                    .onFailure { Log.w(TAG, "health check failed (${failures + 1}/${auto.failures}): ${it.message}") }
-                    .isSuccess
-                if (ok) {
+                val error = checkOnce(settings)
+                if (error == null) {
                     failures = 0
+                    // Только проверка после подключения: периодические выключены.
+                    if (!auto.healthCheck) return@launch
                     continue
                 }
                 failures++
+                Log.w(TAG, "health check failed ($failures/${auto.failures}): $error")
                 if (failures < auto.failures.coerceAtLeast(1)) continue
                 if (!auto.failover) {
-                    VpnController.notify("Сервер не отвечает уже ${failures} раз подряд")
+                    VpnController.notify("Соединение не работает ($failures раз подряд): $error")
                     failures = 0
+                    if (!auto.healthCheck) return@launch
                     continue
                 }
                 // Переключение — отдельной задачей: connect() перезапустит эту проверку.
@@ -230,6 +247,24 @@ class KvnVpnService : VpnService() {
                 return@launch
             }
         }
+    }
+
+    /** Одна проверка соединения; null — всё работает, иначе текст ошибки. */
+    private fun checkOnce(settings: AppSettings): String? {
+        val checks = settings.checks
+        var lastError: String? = null
+        val urls = checks.testUrls.ifEmpty { listOf("") }
+        val httpOk = urls.any { url ->
+            runCatching { CoreBridge.checkConnection(url, checks.testTimeoutMs, checks.testMethod) }
+                .onFailure { lastError = it.message }
+                .isSuccess
+        }
+        if (!httpOk) return lastError ?: "сайты не открываются"
+        if (checks.dnsCheck) {
+            val dns = DnsCheck.run(settings.dns, checks.dnsDomain, viaVpn = true)
+            if (!dns.ok) return "DNS ${settings.dns}: ${dns.error}"
+        }
+        return null
     }
 
     private suspend fun failover() {
@@ -383,7 +418,6 @@ class KvnVpnService : VpnService() {
         const val ACTION_STOP = "io.kvn.client.STOP"
 
         private const val TAG = "KvnVpn"
-        private const val RETRY_AFTER_FAILURE_MS = 20_000L
         private const val CHANNEL_ID = "vpn"
         private const val NOTIFICATION_ID = 1
         private const val MTU = 1500

@@ -2,7 +2,9 @@ package io.kvn.client.vpn
 
 import android.util.Log
 import io.kvn.client.core.CoreBridge
+import io.kvn.client.data.PingMethod
 import io.kvn.client.data.PingStats
+import io.kvn.client.data.Pinger
 import io.kvn.client.data.Repository
 import io.kvn.client.data.ServerNode
 import kotlinx.coroutines.Dispatchers
@@ -33,12 +35,14 @@ class AutoSelector(private val repository: Repository, private val stats: PingSt
             .filter { it.supports(repository.engineFor(it)) }
         if (candidates.isEmpty()) return@withContext null
 
-        // Быстрый пинг первых по статистике: отсекает явно лежащие.
+        // Быстрый пинг первых по статистике: отсекает явно лежащие. Способы
+        // «через прокси» здесь заменяются TCP — настоящая проверка идёт следом.
         val shortlist = stats.order(candidates).take(PING_SHORTLIST)
+        val quickMethod = if (settings.checks.pingMethod == PingMethod.ICMP) PingMethod.ICMP else PingMethod.TCP
         val pinged = coroutineScope {
             shortlist.map { node ->
                 async {
-                    val ms = if (node.server.isEmpty() || node.port <= 0) 0 else CoreBridge.tcpPing(node.server, node.port, 2500)
+                    val ms = Pinger.ping(node, repository.engineFor(node), settings, quickMethod)
                     if (node.server.isNotEmpty()) stats.record(node, ms > 0, ms)
                     node to ms
                 }
@@ -55,9 +59,14 @@ class AutoSelector(private val repository: Repository, private val stats: PingSt
 
         val options = settings.coreOptions(1500)
         for (node in alive.take(TEST_LIMIT)) {
-            val result = runCatching {
-                JSONObject(CoreBridge.testNode(repository.engineFor(node), node.json, options, timeoutMs = 7000))
-            }.getOrNull()
+            // Сервер рабочий, если открылся хотя бы один адрес проверки.
+            var result: JSONObject? = null
+            for (url in settings.checks.testUrls.ifEmpty { listOf("") }) {
+                result = runCatching {
+                    JSONObject(CoreBridge.testNode(repository.engineFor(node), node.json, options, url, settings.checks.testTimeoutMs.coerceAtMost(10_000)))
+                }.getOrNull()
+                if (result?.optBoolean("ok") == true || result?.optString("verdict") == "down") break
+            }
             val ok = result?.optBoolean("ok") == true
             stats.record(node, ok, result?.optInt("ms") ?: 0)
             Log.i(TAG, "auto: ${node.name} → ${if (ok) "ok ${result?.optInt("ms")} ms" else result?.optString("error")}")

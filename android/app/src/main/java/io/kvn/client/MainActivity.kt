@@ -94,6 +94,7 @@ import io.kvn.client.ui.MainViewModel
 import io.kvn.client.ui.components.uiSpring
 import io.kvn.client.ui.screens.AddSubscriptionSheet
 import io.kvn.client.ui.screens.AppsScreen
+import io.kvn.client.ui.screens.DnsScreen
 import io.kvn.client.ui.screens.HomeScreen
 import io.kvn.client.ui.screens.LoginSheet
 import io.kvn.client.ui.screens.OnboardingNext
@@ -328,7 +329,7 @@ private enum class Tab(val title: String, val icon: ImageVector) {
 }
 
 /** Экраны, открывающиеся поверх вкладок. */
-private enum class Overlay { NONE, APPS, WIFI, WHITELIST }
+private enum class Overlay { NONE, APPS, WIFI, WHITELIST, DNS }
 
 @Composable
 private fun App(
@@ -360,6 +361,8 @@ private fun App(
     val nodeTestProgress by viewModel.nodeTestProgress.collectAsStateWithLifecycle()
     val statsVersion by viewModel.statsVersion.collectAsStateWithLifecycle()
     val sheetError by viewModel.sheetError.collectAsStateWithLifecycle()
+    val dnsChecks by viewModel.dnsChecks.collectAsStateWithLifecycle()
+    val dnsChecking by viewModel.dnsChecking.collectAsStateWithLifecycle()
 
     var tab by rememberSaveable { mutableStateOf(Tab.HOME) }
     var overlay by rememberSaveable { mutableStateOf(Overlay.NONE) }
@@ -443,6 +446,16 @@ private fun App(
                         onExcludeWhitelist = viewModel::excludeWhitelistApps,
                     )
                 }
+                Overlay.DNS -> DnsScreen(
+                    current = settings.dns,
+                    checks = dnsChecks,
+                    checking = dnsChecking,
+                    vpnConnected = state is VpnState.Connected,
+                    domain = settings.checks.dnsDomain,
+                    onBack = { overlay = Overlay.NONE },
+                    onSelect = viewModel::setDns,
+                    onCheck = viewModel::checkDnsServers,
+                )
                 Overlay.WHITELIST -> WhitelistScreen(
                     settings = settings,
                     onBack = {
@@ -551,6 +564,8 @@ private fun App(
                             onOpenWifi = { overlay = Overlay.WIFI },
                             onOpenWhitelist = { overlay = Overlay.WHITELIST },
                             onShowIntro = { showIntro = true },
+                            onOpenDns = { overlay = Overlay.DNS },
+                            onChecks = viewModel::updateChecks,
                             onAddTile = onAddTile,
                             loadLogs = viewModel::logs,
                             loadConfig = viewModel::configPreview,

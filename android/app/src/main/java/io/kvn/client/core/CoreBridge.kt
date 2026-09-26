@@ -53,7 +53,16 @@ object CoreBridge {
     fun isHappCrypt5(value: String): Boolean = Libcore.isHappCrypt5(value)
 
     /** Проверка, что работающий VPN пропускает трафик; время ответа в мс. */
-    fun checkConnection(url: String = "", timeoutMs: Int = 8000): Int = Libcore.checkConnection(url, timeoutMs)
+    fun checkConnection(url: String = "", timeoutMs: Int = 8000, method: String = "GET"): Int =
+        Libcore.checkConnection(method, url, timeoutMs)
+
+    /** Пинг сервера способом [method] (tcp, icmp, proxy-get, proxy-head); бросает исключение при неудаче. */
+    fun ping(method: String, engine: Engine, nodeJson: String, optionsJson: String, url: String, timeoutMs: Int): Int =
+        Libcore.ping(method, engine.id, nodeJson, optionsJson, url, timeoutMs)
+
+    /** Проверка DNS-сервера: JSON {ok, ms, ips, error}. [viaVpn] — через работающий туннель. */
+    fun checkDns(server: String, domain: String, viaVpn: Boolean, timeoutMs: Int = 4000): String =
+        Libcore.checkDNS(server, domain, viaVpn, timeoutMs)
 
     /** HTTP-запрос с запасным DNS (если системный не находит имя). Ответ — JSON. */
     fun httpFetch(method: String, url: String, headersJson: String, body: String, timeoutMs: Int): String =

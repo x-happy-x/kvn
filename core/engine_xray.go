@@ -95,7 +95,7 @@ func buildXrayOutboundConfig(node *Node, options *Options, logPath string) (map[
 
 	return map[string]any{
 		"log":       logConfig,
-		"dns":       map[string]any{"servers": []any{dnsHost(options.DNS)}},
+		"dns":       map[string]any{"servers": []any{xrayDNSServer(options.DNS)}},
 		"outbounds": outbounds,
 		"routing":   map[string]any{"domainStrategy": "AsIs", "rules": rules},
 	}, nil
@@ -209,6 +209,12 @@ func fenceTunFd(fd int) error {
 	if err != nil {
 		return unix.Close(fd)
 	}
+	// Номер уже был свободен (его закрыло само ядро, как mihomo), и заглушка
+	// получила именно его — так и оставляем. Dup3 на себя дал бы EINVAL, а
+	// закрытие заглушки снова освободило бы номер для следующего запуска.
+	if null == fd {
+		return nil
+	}
 	defer unix.Close(null)
 	if err := unix.Dup3(null, fd, unix.O_CLOEXEC); err != nil && !errors.Is(err, unix.EBADF) {
 		return err
@@ -226,4 +232,14 @@ func (e *xrayEngine) Logs() string {
 func (e *xrayEngine) DialProxy(ctx context.Context, host string, port int) (net.Conn, error) {
 	ctx = session.SetForcedOutboundTagToContext(ctx, xrayProxyTag)
 	return core.Dial(ctx, e.instance, xnet.TCPDestination(xnet.ParseAddress(host), xnet.Port(port)))
+}
+
+// xrayDNSServer: DoH и DNS поверх TCP xray понимает сам, DoT — нет, поэтому
+// для tls:// и обычных адресов остаётся голый адрес сервера.
+func xrayDNSServer(dns string) string {
+	lower := strings.ToLower(dns)
+	if strings.HasPrefix(lower, "https://") || strings.HasPrefix(lower, "tcp://") {
+		return dns
+	}
+	return dnsHost(dns)
 }

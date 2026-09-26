@@ -25,6 +25,9 @@ const mihomoGroup = "PROXY"
 type mihomoEngine struct {
 	logs     *logRing
 	stopLogs func()
+	// tunFd — номер копии fd, отданной mihomo; после остановки он занимается
+	// заглушкой, чтобы его не получил следующий запуск (см. fenceTunFd).
+	tunFd int
 }
 
 // buildMihomoConfig собирает конфиг mihomo: TUN по fd, fake-ip DNS и одну
@@ -124,7 +127,7 @@ func startMihomo(node *Node, options *Options, fd int) (*mihomoEngine, error) {
 		C.SetHomeDir(homeDir)
 	}
 
-	engine := &mihomoEngine{logs: newLogRing(400)}
+	engine := &mihomoEngine{logs: newLogRing(400), tunFd: tunFd}
 	engine.stopLogs = engine.collectLogs()
 
 	parsed, err := executor.ParseWithBytes(payload)
@@ -167,13 +170,20 @@ func (e *mihomoEngine) collectLogs() func() {
 }
 
 func (e *mihomoEngine) Stop() error {
+	// Сначала подменяем TUN заглушкой: gVisor mihomo перестаёт получать пакеты
+	// ещё до остановки. Иначе его чтение, пережившее Shutdown, продолжало бы
+	// идти по этому номеру fd, а номер достаётся следующему ядру — и старый стек
+	// воровал бы у него пакеты, отвечая RST (переключение mihomo → xray).
+	_ = fenceTunFd(e.tunFd)
 	statistic.DefaultManager.Range(func(connection statistic.Tracker) bool {
 		_ = connection.Close()
 		return true
 	})
 	executor.Shutdown()
 	e.stopLogs()
-	return nil
+	// mihomo при остановке закрывает «свой» fd — это уже заглушка; занимаем
+	// номер снова, чтобы он не освободился для следующего запуска.
+	return fenceTunFd(e.tunFd)
 }
 
 func (e *mihomoEngine) Logs() string {

@@ -206,7 +206,7 @@ func TestHTTPFetchAndCheckConnection(t *testing.T) {
 	if _, err := HTTPFetch("GET", "http://kvn-nonexistent.invalid/", "", "", 3000); err == nil || !strings.Contains(err.Error(), "kvn-nonexistent.invalid") {
 		t.Fatalf("ждали понятную ошибку DNS с именем хоста, получили %v", err)
 	}
-	if _, err := CheckConnection("", 1000); err == nil {
+	if _, err := CheckConnection("", "", 1000); err == nil {
 		t.Fatal("без запущенного ядра проверка должна падать")
 	}
 }

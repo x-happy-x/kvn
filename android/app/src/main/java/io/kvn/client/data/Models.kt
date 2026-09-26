@@ -269,6 +269,7 @@ data class AppSettings(
     val serverSort: ServerSort = ServerSort.SUBSCRIPTIONS,
     /** Показывать настройки для опытных: ядро, DNS, обход блокировок, диагностику. */
     val advanced: Boolean = false,
+    val checks: CheckOptions = CheckOptions(),
 ) {
     /** Настройки в формате libcore Options. */
     fun coreOptions(mtu: Int): String = JSONObject().apply {
@@ -302,6 +303,64 @@ data class AppSettings(
         Engine.MIHOMO -> userAgentMihomo
     }
 }
+
+/** Способы пинга серверов, как в Happ. */
+enum class PingMethod(val id: String, val title: String, val description: String) {
+    TCP("tcp", "TCP", "Соединение с сервером. Быстро, но не проверяет, пропускает ли сервер трафик"),
+    ICMP("icmp", "ICMP", "Обычный ping до адреса сервера. Многие серверы на него не отвечают"),
+    PROXY_GET("proxy-get", "Через прокси (GET)", "Открывает адрес проверки через сам сервер — честно, но дольше"),
+    PROXY_HEAD("proxy-head", "Через прокси (HEAD)", "То же, но запросом HEAD: меньше трафика");
+
+    val throughProxy: Boolean get() = this == PROXY_GET || this == PROXY_HEAD
+
+    companion object {
+        fun of(id: String?): PingMethod = entries.firstOrNull { it.id == id } ?: TCP
+    }
+}
+
+/** Настройки пингов и проверок соединения. */
+data class CheckOptions(
+    val pingMethod: PingMethod = PingMethod.TCP,
+    val pingTimeoutMs: Int = 3000,
+    /** Адреса проверки: соединение считается рабочим, если открылся хотя бы один. */
+    val testUrls: List<String> = DEFAULT_TEST_URLS,
+    /** GET или HEAD. */
+    val testMethod: String = "GET",
+    val testTimeoutMs: Int = 10_000,
+    /** Проверить соединение вскоре после подключения. */
+    val afterConnect: Boolean = true,
+    val afterConnectDelaySec: Int = 5,
+    /** Через сколько секунд повторять проверку после неудачи. */
+    val retrySeconds: Int = 20,
+    /** Дополнительно проверять, что через VPN отвечает выбранный DNS. */
+    val dnsCheck: Boolean = false,
+    val dnsDomain: String = "google.com",
+) {
+    val testUrl: String get() = testUrls.firstOrNull().orEmpty()
+
+    companion object {
+        val DEFAULT_TEST_URLS = listOf(
+            "https://www.gstatic.com/generate_204",
+            "https://cp.cloudflare.com/generate_204",
+        )
+    }
+}
+
+/** DNS-сервер из готового списка. */
+data class DnsPreset(val title: String, val address: String)
+
+val DNS_PRESETS = listOf(
+    DnsPreset("Cloudflare", "1.1.1.1"),
+    DnsPreset("Google", "8.8.8.8"),
+    DnsPreset("Quad9", "9.9.9.9"),
+    DnsPreset("Яндекс", "77.88.8.8"),
+    DnsPreset("AdGuard (без рекламы)", "94.140.14.14"),
+    DnsPreset("Cloudflare DoH", "https://1.1.1.1/dns-query"),
+    DnsPreset("Google DoH", "https://dns.google/dns-query"),
+    DnsPreset("AdGuard DoH", "https://dns.adguard-dns.com/dns-query"),
+    DnsPreset("Cloudflare TCP", "tcp://1.1.1.1:53"),
+    DnsPreset("Cloudflare DoT", "tls://1.1.1.1"),
+)
 
 /** Авто-режим: выбор лучшего сервера и контроль соединения. */
 data class AutoOptions(
