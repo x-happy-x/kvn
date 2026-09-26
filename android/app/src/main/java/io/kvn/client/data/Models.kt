@@ -252,6 +252,8 @@ data class AppSettings(
     /** Свой User-Agent для запросов подписки; пусто — мимикрия под Happ / FlClashX. */
     val userAgentXray: String = "",
     val userAgentMihomo: String = "",
+    /** Свой x-hwid для подписок; пусто — ANDROID_ID устройства. */
+    val customHwid: String = "",
     val logLevel: String = "warning",
     val appMode: AppMode = AppMode.ALL,
     val apps: Set<String> = emptySet(),

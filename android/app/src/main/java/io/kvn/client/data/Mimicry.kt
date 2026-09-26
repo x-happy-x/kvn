@@ -40,13 +40,16 @@ object Mimicry {
             "User-Agent" to userAgent(engine, settings),
             "Accept" to "*/*",
             "Accept-Language" to "$language,en;q=0.9",
-            "x-hwid" to hwid(context),
+            "x-hwid" to hwid(context, settings),
             "x-device-os" to "Android",
             "x-ver-os" to Build.VERSION.RELEASE.orEmpty(),
             "x-device-model" to deviceModel(),
             "x-device-locale" to language,
         )
     }
+
+    /** x-hwid: свой из настроек или ANDROID_ID устройства. */
+    fun hwid(context: Context, settings: AppSettings): String = settings.customHwid.trim().ifEmpty { hwid(context) }
 
     /** Стабильный идентификатор устройства: ANDROID_ID, как у Happ на Android. */
     @SuppressLint("HardwareIds")

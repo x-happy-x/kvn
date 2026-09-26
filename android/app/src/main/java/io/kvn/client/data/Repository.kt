@@ -292,6 +292,7 @@ class Repository(private val context: Context) {
             ipv6 = prefs.getBoolean("ipv6", defaults.ipv6),
             userAgentXray = prefs.getString("userAgentXray", "").orEmpty(),
             userAgentMihomo = prefs.getString("userAgentMihomo", "").orEmpty(),
+            customHwid = prefs.getString("customHwid", "").orEmpty(),
             logLevel = prefs.getString("logLevel", defaults.logLevel) ?: defaults.logLevel,
             appMode = AppMode.of(prefs.getString("appMode", null)),
             apps = prefs.getStringSet("apps", emptySet()).orEmpty().toSet(),
@@ -358,6 +359,7 @@ class Repository(private val context: Context) {
             .putBoolean("ipv6", settings.ipv6)
             .putString("userAgentXray", settings.userAgentXray)
             .putString("userAgentMihomo", settings.userAgentMihomo)
+            .putString("customHwid", settings.customHwid)
             .putString("logLevel", settings.logLevel)
             .putString("appMode", settings.appMode.id)
             .putStringSet("apps", settings.apps)

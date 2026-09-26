@@ -42,6 +42,10 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- Долгое нажатие на плитку KVN в шторке открывает приложение. -->
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE_PREFERENCES" />
+            </intent-filter>
             <!-- Ссылки импорта других VPN-клиентов (happ://, clash://, sing-box://…) и kvn://import -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />

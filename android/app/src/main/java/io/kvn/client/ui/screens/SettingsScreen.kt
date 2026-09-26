@@ -38,6 +38,7 @@ import androidx.compose.material.icons.rounded.Lan
 import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.Memory
 import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.rounded.Fingerprint
 import androidx.compose.material.icons.rounded.NetworkCheck
 import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.Bolt
@@ -113,6 +114,7 @@ fun SettingsScreen(
     loadConfig: suspend () -> String,
 ) {
     var editing by remember { mutableStateOf<EditField?>(null) }
+    val context = androidx.compose.ui.platform.LocalContext.current
     var textDialog by remember { mutableStateOf<TextDialog?>(null) }
 
     Column(
@@ -229,6 +231,13 @@ fun SettingsScreen(
                 Divider()
                 ValueRow(Icons.Rounded.Person, "User-Agent для Mihomo", Mimicry.userAgent(Engine.MIHOMO, settings)) { editing = EditField.UA_MIHOMO }
                 Divider()
+                // По x-hwid панели считают устройства: можно подставить тот же, что у Happ.
+                ValueRow(
+                    Icons.Rounded.Fingerprint,
+                    "x-hwid",
+                    Mimicry.hwid(context, settings) + if (settings.customHwid.isBlank()) " (ANDROID_ID)" else " (свой)",
+                ) { editing = EditField.HWID }
+                Divider()
                 ValueRow(Icons.Rounded.Tune, "Уровень журнала", settings.logLevel) { editing = EditField.LOG_LEVEL }
             }
 
@@ -258,6 +267,7 @@ fun SettingsScreen(
                 EditField.DNS -> onUpdate(true) { it.copy(dns = value) }
                 EditField.UA_XRAY -> onUpdate(false) { it.copy(userAgentXray = value) }
                 EditField.UA_MIHOMO -> onUpdate(false) { it.copy(userAgentMihomo = value) }
+                EditField.HWID -> onUpdate(false) { it.copy(customHwid = value) }
                 EditField.LOG_LEVEL -> onUpdate(true) { it.copy(logLevel = value) }
             }
         }
@@ -331,6 +341,7 @@ private enum class EditField(val title: String, val hint: String) {
     DNS("DNS-сервер", "1.1.1.1, 8.8.8.8 или https://1.1.1.1/dns-query"),
     UA_XRAY("User-Agent для Xray", "Пусто — как Happ (${Mimicry.HAPP_USER_AGENT})"),
     UA_MIHOMO("User-Agent для Mihomo", "Пусто — как FlClashX (${Mimicry.FLCLASHX_USER_AGENT})"),
+    HWID("x-hwid", "Идентификатор устройства для панели подписки. Пусто — ANDROID_ID этого телефона. Изменение применится при следующем обновлении подписок."),
     LOG_LEVEL("Уровень журнала", "debug, info, warning или error"),
 }
 
@@ -406,9 +417,10 @@ private fun EditDialog(field: EditField, settings: AppSettings, onDismiss: () ->
         EditField.DNS -> settings.dns
         EditField.UA_XRAY -> settings.userAgentXray
         EditField.UA_MIHOMO -> settings.userAgentMihomo
+        EditField.HWID -> settings.customHwid
         EditField.LOG_LEVEL -> settings.logLevel
     }
-    val allowEmpty = field == EditField.UA_XRAY || field == EditField.UA_MIHOMO
+    val allowEmpty = field == EditField.UA_XRAY || field == EditField.UA_MIHOMO || field == EditField.HWID
     var value by remember { mutableStateOf(initial) }
     AlertDialog(
         onDismissRequest = onDismiss,
