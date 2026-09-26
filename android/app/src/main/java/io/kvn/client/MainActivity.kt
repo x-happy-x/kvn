@@ -532,6 +532,11 @@ private fun App(
                             onToggleCollapsed = viewModel::toggleCollapsed,
                             shareLink = viewModel::shareLink,
                             onScanQr = onScanQr,
+                            subLabLabel = settings.account.takeIf { it.server.isNotEmpty() }?.let { account ->
+                                listOf(account.name.ifEmpty { account.username }, account.server.removePrefix("https://"))
+                                    .filter { it.isNotEmpty() }.joinToString(" · ")
+                            },
+                            subLabTags = settings.subLabTags,
                         )
                         Tab.SCAN -> ScanScreen(
                             presets = viewModel.scanPresets,
@@ -566,6 +571,7 @@ private fun App(
                             onShowIntro = { showIntro = true },
                             onOpenDns = { overlay = Overlay.DNS },
                             onChecks = viewModel::updateChecks,
+                            onSubLabTags = viewModel::setSubLabTags,
                             onAddTile = onAddTile,
                             loadLogs = viewModel::logs,
                             loadConfig = viewModel::configPreview,

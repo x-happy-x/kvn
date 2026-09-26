@@ -15,8 +15,8 @@ data class FetchedSubscription(
 )
 
 object SubscriptionFetcher {
-    fun fetch(url: String, headers: Map<String, String>): FetchedSubscription {
-        val response = Http.request("GET", url, headers)
+    fun fetch(url: String, headers: Map<String, String>, timeoutMs: Int = 20_000): FetchedSubscription {
+        val response = Http.request("GET", url, headers, timeoutMs = timeoutMs)
         if (response.status !in 200..299) {
             throw IllegalStateException("Сервер подписки ответил ${response.status}")
         }

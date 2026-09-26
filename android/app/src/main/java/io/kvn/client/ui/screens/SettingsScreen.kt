@@ -39,6 +39,8 @@ import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.Memory
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Fingerprint
+import androidx.compose.material.icons.rounded.HourglassTop
+import androidx.compose.material.icons.rounded.Tag
 import androidx.compose.material.icons.rounded.NetworkCheck
 import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.Bolt
@@ -109,12 +111,23 @@ fun SettingsScreen(
     onShowIntro: () -> Unit = {},
     onOpenDns: () -> Unit = {},
     onChecks: ((CheckOptions) -> CheckOptions) -> Unit = {},
+    onSubLabTags: (Set<String>) -> Unit = {},
     onAddTile: (() -> Unit)?,
     loadLogs: suspend () -> String,
     loadConfig: suspend () -> String,
 ) {
     var editing by remember { mutableStateOf<EditField?>(null) }
     val context = androidx.compose.ui.platform.LocalContext.current
+    var pickingTimeout by remember { mutableStateOf(false) }
+    if (pickingTimeout) {
+        ChoiceDialog(
+            "Ждать ответа подписки",
+            listOf(10, 20, 30, 60, 90, 120, 180),
+            settings.subscriptionTimeoutSec,
+            { "$it с" },
+            { pickingTimeout = false },
+        ) { value -> onUpdate(false) { it.copy(subscriptionTimeoutSec = value) } }
+    }
     var textDialog by remember { mutableStateOf<TextDialog?>(null) }
 
     Column(
@@ -137,7 +150,7 @@ fun SettingsScreen(
         ChecksPanel(settings.checks, onChecks)
 
         SectionTitle("Аккаунт sub-lab")
-        AccountPanel(settings, accountBusy, onLogin, onSync, onLogout)
+        AccountPanel(settings, accountBusy, onLogin, onSync, onLogout, onSubLabTags)
 
         SectionTitle("Маршрутизация")
         Panel(Modifier.fillMaxWidth()) {
@@ -239,6 +252,8 @@ fun SettingsScreen(
                 ) { editing = EditField.HWID }
                 Divider()
                 ValueRow(Icons.Rounded.Tune, "Уровень журнала", settings.logLevel) { editing = EditField.LOG_LEVEL }
+                Divider()
+                ValueRow(Icons.Rounded.HourglassTop, "Таймаут запроса подписки", "${settings.subscriptionTimeoutSec} с") { pickingTimeout = true }
             }
 
             SectionTitle("Диагностика")
@@ -302,8 +317,16 @@ private fun AccountPanel(
     onLogin: () -> Unit,
     onSync: () -> Unit,
     onLogout: () -> Unit,
+    onTags: (Set<String>) -> Unit,
 ) {
     val account = settings.account
+    var editingTags by remember { mutableStateOf(false) }
+    if (editingTags) {
+        TagFilterDialog(settings.subLabTags, settings.subLabKnownTags, onDismiss = { editingTags = false }) { tags ->
+            editingTags = false
+            onTags(tags)
+        }
+    }
     Panel(Modifier.fillMaxWidth()) {
         if (!account.loggedIn) {
             ValueRow(
@@ -332,6 +355,12 @@ private fun AccountPanel(
         }
         Divider()
         ValueRow(Icons.Rounded.Sync, "Обновить список подписок", "", onSync)
+        Divider()
+        ValueRow(
+            Icons.Rounded.Tag,
+            "Фильтр по тегам",
+            if (settings.subLabTags.isEmpty()) "Все подписки аккаунта" else "Только с " + settings.subLabTags.sorted().joinToString(" ") { "#$it" },
+        ) { editingTags = true }
         Divider()
         ValueRow(Icons.AutoMirrored.Rounded.Logout, "Выйти", "Подписки из sub-lab уберутся из приложения", onLogout)
     }
@@ -816,5 +845,71 @@ private fun TextEditDialog(
             }) { Text("Сохранить") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Отмена") } },
+    )
+}
+
+/**
+ * Фильтр подписок sub-lab: отмеченные теги (из последней синхронизации) и
+ * свои через пробел. Подписка попадает в приложение, если у неё есть хотя бы
+ * один из выбранных тегов.
+ */
+@Composable
+private fun TagFilterDialog(current: Set<String>, known: Set<String>, onDismiss: () -> Unit, onSave: (Set<String>) -> Unit) {
+    var selected by remember { mutableStateOf(current) }
+    var custom by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Palette.SurfaceHigh,
+        title = { Text("Фильтр по тегам") },
+        text = {
+            Column {
+                Text(
+                    "Из sub-lab будут браться только подписки хотя бы с одним из выбранных тегов. Ничего не выбрано — все.",
+                    color = Palette.TextSecondary,
+                    fontSize = 13.sp,
+                )
+                Spacer(Modifier.height(10.dp))
+                val all = (known + selected).sorted()
+                if (all.isEmpty()) {
+                    Text("Тегов пока не видно: у подписок в sub-lab их нет или список ещё не синхронизирован.", color = Palette.TextMuted, fontSize = 12.sp)
+                }
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    all.forEach { tag ->
+                        val on = tag in selected
+                        Text(
+                            "#$tag",
+                            color = if (on) Palette.TextPrimary else Palette.TextSecondary,
+                            fontSize = 13.sp,
+                            fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(if (on) Palette.Violet else Palette.Surface)
+                                .clickable { selected = if (on) selected - tag else selected + tag }
+                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                        )
+                    }
+                }
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = custom,
+                    onValueChange = { custom = it },
+                    label = { Text("Другие теги") },
+                    placeholder = { Text("#shared #family") },
+                    singleLine = true,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                val extra = custom.split(' ', ',', ';').map { it.trim().removePrefix("#").lowercase() }.filter { it.isNotEmpty() }
+                onSave(selected + extra)
+            }) { Text("Применить") }
+        },
+        dismissButton = {
+            Row {
+                TextButton(onClick = { onSave(emptySet()) }) { Text("Сбросить") }
+                TextButton(onClick = onDismiss) { Text("Отмена") }
+            }
+        },
     )
 }

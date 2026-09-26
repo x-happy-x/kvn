@@ -111,6 +111,9 @@ fun ServersScreen(
     onToggleCollapsed: (Subscription) -> Unit = {},
     shareLink: (ServerNode) -> String? = { null },
     onScanQr: () -> Unit = {},
+    /** Аккаунт sub-lab для заголовка группы, например «Иван · sub.example.com». */
+    subLabLabel: String? = null,
+    subLabTags: Set<String> = emptySet(),
 ) {
     // Что показываем QR-кодом: заголовок и ссылка.
     var sharing by remember { mutableStateOf<Pair<String, String>?>(null) }
@@ -206,7 +209,31 @@ fun ServersScreen(
                 }
                 return@LazyColumn
             }
-            subscriptions.forEach { subscription ->
+            // Подписки аккаунта sub-lab — отдельной выделенной группой сверху,
+            // свои — следом.
+            val fromSubLab = subscriptions.filter { it.source == SubscriptionSource.SUBLAB }
+            val own = subscriptions.filter { it.source != SubscriptionSource.SUBLAB }
+            val grouped = fromSubLab.isNotEmpty()
+            val ordered = fromSubLab + own
+            ordered.forEachIndexed { index, subscription ->
+                if (grouped && index == 0) {
+                    item(key = "group-sublab") {
+                        GroupHeader(
+                            modifier = Modifier.animateItem(),
+                            title = "sub-lab",
+                            subtitle = listOfNotNull(
+                                subLabLabel,
+                                subLabTags.takeIf { it.isNotEmpty() }?.sorted()?.joinToString(" ") { "#$it" },
+                            ).joinToString(" · "),
+                            accent = true,
+                        )
+                    }
+                }
+                if (grouped && index == fromSubLab.size && own.isNotEmpty()) {
+                    item(key = "group-own") {
+                        GroupHeader(modifier = Modifier.animateItem(), title = "Свои подписки", subtitle = "", accent = false)
+                    }
+                }
                 item(key = "header-${subscription.id}") {
                   Box(Modifier.animateItem()) {
                     SubscriptionHeader(
@@ -234,6 +261,35 @@ fun ServersScreen(
                         onLongClick = { shareNode(node) },
                     )
                 }
+            }
+        }
+    }
+}
+
+/** Заголовок группы подписок: sub-lab выделен акцентной полосой. */
+@Composable
+private fun GroupHeader(modifier: Modifier, title: String, subtitle: String, accent: Boolean) {
+    Row(
+        modifier
+            .fillMaxWidth()
+            .padding(top = 12.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(if (accent) Palette.Violet.copy(alpha = 0.14f) else Palette.Surface)
+            .border(1.dp, if (accent) Palette.Violet.copy(alpha = 0.5f) else Palette.Stroke, RoundedCornerShape(14.dp))
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier
+                .size(width = 4.dp, height = 22.dp)
+                .clip(RoundedCornerShape(2.dp))
+                .background(if (accent) Palette.Violet else Palette.TextMuted),
+        )
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = if (accent) Palette.VioletSoft else Palette.TextSecondary)
+            if (subtitle.isNotEmpty()) {
+                Text(subtitle, fontSize = 11.sp, color = Palette.TextMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
     }
@@ -350,7 +406,7 @@ private fun SubscriptionHeader(
                 if (!subscription.enabled) add("выключена")
                 subscription.engine?.let { add("ядро ${it.title}") }
                 if (subscription.borrowsNodes(engine)) add("серверы прошлого ядра")
-                if (subscription.source == SubscriptionSource.SUBLAB) add("sub-lab")
+                if (subscription.tags.isNotEmpty()) add(subscription.tags.joinToString(" ") { "#$it" })
                 add("$count ${plural(count, "сервер", "сервера", "серверов")}")
                 if (subscription.total > 0) add("${formatBytes(subscription.used)} / ${formatBytes(subscription.total)}")
                 expireLabel(subscription.expire)?.let { add(it) }

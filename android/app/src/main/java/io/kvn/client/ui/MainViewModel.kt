@@ -415,6 +415,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 .onSuccess { report ->
                     val parts = buildList {
                         add("подписок: ${report.total}")
+                        if (report.filtered > 0) add("скрыто фильтром: ${report.filtered}")
                         if (report.added > 0) add("новых: ${report.added}")
                         if (report.removed > 0) add("убрано: ${report.removed}")
                     }
@@ -424,6 +425,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 .onFailure { _messages.tryEmit(it.message ?: "sub-lab недоступен") }
             _accountBusy.value = false
         }
+    }
+
+    /** Фильтр подписок sub-lab по тегам; сразу пересинхронизирует список. */
+    fun setSubLabTags(tags: Set<String>) {
+        updateSettings(restart = false) { it.copy(subLabTags = tags.map { tag -> tag.trim().removePrefix("#").lowercase() }.filter { tag -> tag.isNotEmpty() }.toSet()) }
+        if (settings.value.account.loggedIn) subLabSync()
     }
 
     fun subLabLogout() {

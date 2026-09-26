@@ -77,6 +77,8 @@ data class Subscription(
     val source: SubscriptionSource = if (url.isEmpty()) SubscriptionSource.MANUAL else SubscriptionSource.URL,
     /** Короткая ссылка sub-lab, по которой подписка сопоставляется при синхронизации. */
     val shortId: String = "",
+    /** Теги из sub-lab: по ним работает фильтр подписок аккаунта. */
+    val tags: List<String> = emptyList(),
     val updatedAt: Long = 0,
     val upload: Long = 0,
     val download: Long = 0,
@@ -141,6 +143,7 @@ data class Subscription(
         put("url", url)
         put("source", source.id)
         put("shortId", shortId)
+        put("tags", JSONArray().apply { tags.forEach { put(it) } })
         put("updatedAt", updatedAt)
         put("upload", upload)
         put("download", download)
@@ -172,6 +175,7 @@ data class Subscription(
                 url = url,
                 source = source,
                 shortId = json.optString("shortId"),
+                tags = json.optJSONArray("tags")?.let { array -> List(array.length()) { array.optString(it) } }.orEmpty(),
                 updatedAt = json.optLong("updatedAt"),
                 upload = json.optLong("upload"),
                 download = json.optLong("download"),
@@ -254,6 +258,15 @@ data class AppSettings(
     val userAgentMihomo: String = "",
     /** Свой x-hwid для подписок; пусто — ANDROID_ID устройства. */
     val customHwid: String = "",
+    /** Сколько ждать ответа сервера подписки. */
+    val subscriptionTimeoutSec: Int = 20,
+    /**
+     * Фильтр подписок sub-lab по тегам: берутся только подписки хотя бы с одним
+     * из них. Пусто — все.
+     */
+    val subLabTags: Set<String> = emptySet(),
+    /** Теги, встреченные при последней синхронизации, — подсказки для фильтра. */
+    val subLabKnownTags: Set<String> = emptySet(),
     val logLevel: String = "warning",
     val appMode: AppMode = AppMode.ALL,
     val apps: Set<String> = emptySet(),

@@ -14,7 +14,8 @@ import java.io.File
 import java.util.UUID
 
 /** Итог синхронизации с sub-lab. */
-data class SyncReport(val added: Int, val removed: Int, val total: Int, val errors: List<String>)
+/** Итог синхронизации; [filtered] — подписки, скрытые фильтром по тегам. */
+data class SyncReport(val added: Int, val removed: Int, val total: Int, val errors: List<String>, val filtered: Int = 0)
 
 /**
  * Подписки и настройки. Подписки лежат JSON-файлом, настройки — в SharedPreferences;
@@ -172,12 +173,17 @@ class Repository(private val context: Context) {
     suspend fun syncSubLab(): SyncReport = withContext(Dispatchers.IO) {
         val account = _settings.value.account
         check(account.loggedIn) { "Войдите в sub-lab" }
-        val remote = try {
+        val all = try {
             SubLabClient.subscriptions(account.server, account.token)
         } catch (error: SubLabException) {
             if (error.unauthorized) updateSettings { it.copy(account = it.account.copy(token = "")) }
             throw error
         }
+        // Фильтр по тегам: остальные подписки аккаунта в приложение не попадают
+        // (а уже добавленные уходят, как отозванные).
+        val filter = _settings.value.subLabTags
+        val remote = if (filter.isEmpty()) all else all.filter { item -> item.tags.any { it in filter } }
+        updateSettings { it.copy(subLabKnownTags = all.flatMap { item -> item.tags }.toSet()) }
         val keyOf = { shortId: String, url: String -> shortId.ifEmpty { url } }
         val existing = _subscriptions.value.filter { it.source == SubscriptionSource.SUBLAB }
         val remoteKeys = remote.map { keyOf(it.shortId, it.url) }.toSet()
@@ -192,7 +198,7 @@ class Repository(private val context: Context) {
                 } else {
                     null
                 }
-                if (fresh != null) item.copy(name = fresh.title, url = fresh.url) else item
+                if (fresh != null) item.copy(name = fresh.title, url = fresh.url, tags = fresh.tags) else item
             }
             val fresh = remote.filter { keyOf(it.shortId, it.url) !in known }.map {
                 Subscription(
@@ -201,6 +207,7 @@ class Repository(private val context: Context) {
                     url = it.url,
                     source = SubscriptionSource.SUBLAB,
                     shortId = it.shortId,
+                    tags = it.tags,
                 )
             }
             added += fresh
@@ -215,7 +222,7 @@ class Repository(private val context: Context) {
         if (_settings.value.selectedNodeId == null || selectedNode()?.id != _settings.value.selectedNodeId) {
             allNodes.firstOrNull()?.let { selectNode(it) }
         }
-        SyncReport(added = added.size, removed = removed.size, total = remote.size, errors = errors)
+        SyncReport(added = added.size, removed = removed.size, total = remote.size, errors = errors, filtered = all.size - remote.size)
     }
 
     /** Выход: сессия на сервере закрывается, подписки из sub-lab убираются. */
@@ -231,7 +238,7 @@ class Repository(private val context: Context) {
 
     private fun download(base: Subscription, engine: Engine): Subscription {
         val headers = Mimicry.headers(context, engine, _settings.value)
-        val fetched = SubscriptionFetcher.fetch(base.url, headers)
+        val fetched = SubscriptionFetcher.fetch(base.url, headers, _settings.value.subscriptionTimeoutSec.coerceIn(5, 300) * 1000)
         val nodes = ServerNode.listFromLibcore(base.id, CoreBridge.parseSubscription(fetched.body))
         return base.withNodes(engine, nodes).copy(
             name = base.name.ifBlank { fetched.title ?: hostOf(base.url) },
@@ -293,6 +300,9 @@ class Repository(private val context: Context) {
             userAgentXray = prefs.getString("userAgentXray", "").orEmpty(),
             userAgentMihomo = prefs.getString("userAgentMihomo", "").orEmpty(),
             customHwid = prefs.getString("customHwid", "").orEmpty(),
+            subscriptionTimeoutSec = prefs.getInt("subscriptionTimeoutSec", 20),
+            subLabTags = prefs.getStringSet("subLabTags", emptySet()).orEmpty().toSet(),
+            subLabKnownTags = prefs.getStringSet("subLabKnownTags", emptySet()).orEmpty().toSet(),
             logLevel = prefs.getString("logLevel", defaults.logLevel) ?: defaults.logLevel,
             appMode = AppMode.of(prefs.getString("appMode", null)),
             apps = prefs.getStringSet("apps", emptySet()).orEmpty().toSet(),
@@ -360,6 +370,9 @@ class Repository(private val context: Context) {
             .putString("userAgentXray", settings.userAgentXray)
             .putString("userAgentMihomo", settings.userAgentMihomo)
             .putString("customHwid", settings.customHwid)
+            .putInt("subscriptionTimeoutSec", settings.subscriptionTimeoutSec)
+            .putStringSet("subLabTags", settings.subLabTags)
+            .putStringSet("subLabKnownTags", settings.subLabKnownTags)
             .putString("logLevel", settings.logLevel)
             .putString("appMode", settings.appMode.id)
             .putStringSet("apps", settings.apps)

@@ -9,6 +9,8 @@ data class SubLabSubscription(
     val title: String,
     val url: String,
     val shortId: String,
+    /** Теги ссылки в sub-lab (без «#», в нижнем регистре). */
+    val tags: List<String> = emptyList(),
 )
 
 /** Ответ sub-lab на вход по паролю. */
@@ -70,10 +72,14 @@ object SubLabClient {
             val url = item.optString("url")
             if (!url.startsWith("http://") && !url.startsWith("https://")) continue
             val shortId = item.optString("shortId")
+            val tags = item.optJSONArray("tags")?.let { array ->
+                List(array.length()) { array.optString(it).trim().removePrefix("#").lowercase() }.filter { it.isNotEmpty() }.distinct()
+            }.orEmpty()
             out += SubLabSubscription(
                 title = item.optString("title").ifEmpty { shortId.ifEmpty { url } },
                 url = url,
                 shortId = shortId,
+                tags = tags,
             )
         }
         return out
