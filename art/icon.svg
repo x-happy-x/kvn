@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512"><defs>
+<radialGradient id="bg" cx="50%" cy="38%" r="75%"><stop offset="0" stop-color="#231A4D"/><stop offset=".55" stop-color="#10121A"/><stop offset="1" stop-color="#07080D"/></radialGradient>
+<linearGradient id="red" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#FF7A8F"/><stop offset="1" stop-color="#D9294E"/></linearGradient>
+<linearGradient id="acc" x1=".1" y1="0" x2=".9" y2="1"><stop offset="0" stop-color="#B49CFF"/><stop offset=".5" stop-color="#7C5CFF"/><stop offset="1" stop-color="#36D1DC"/></linearGradient>
+<linearGradient id="trail" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="#36D1DC" stop-opacity="0"/><stop offset="1" stop-color="#36D1DC" stop-opacity=".9"/></linearGradient>
+<filter id="gR" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="10" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+<filter id="gV" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="16" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+<filter id="rough"><feTurbulence type="fractalNoise" baseFrequency=".9" numOctaves="2" result="n"/><feDisplacementMap in="SourceGraphic" in2="n" scale="7"/></filter>
+</defs><rect width="512" height="512" rx="114" fill="url(#bg)"/>
+<g filter="url(#gR)" opacity=".92">
+ <circle cx="256" cy="256" r="150" fill="none" stroke="url(#red)" stroke-width="36"/>
+ <g transform="rotate(45 256 256)" fill="url(#red)">
+  <polygon points="106,238 206,238 194,250 208,262 196,274 106,274"/>
+  <polygon points="306,238 406,238 406,274 316,274 304,262 318,250"/>
+ </g></g>
+<g fill="#FF6F86" transform="rotate(45 256 256)"><polygon points="220,222 232,214 230,229"/><polygon points="286,290 298,286 292,300"/><polygon points="228,292 238,300 224,302"/></g>
+<path d="M60,470 L226,292 L256,322 Z" fill="url(#trail)" opacity=".5"/>
+<g filter="url(#gV)">
+ <path d="M392,120 L130,248 L226,292 Z" fill="url(#acc)"/>
+ <path d="M392,120 L226,292 L286,392 Z" fill="url(#acc)"/>
+ <path d="M392,120 L226,292 L286,392 Z" fill="#000" fill-opacity=".18"/>
+ <path d="M226,292 L240,352 L262,334 Z" fill="#4A33C8"/>
+</g>
+<path d="M392,120 L130,248 L226,292 Z" fill="#fff" fill-opacity=".18"/></svg>

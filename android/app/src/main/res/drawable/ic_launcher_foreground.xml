@@ -1,28 +1,105 @@
+<?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- Кольцо с градиентом и «кнопка питания» в центре. -->
-    <path
-        android:strokeWidth="5"
-        android:strokeLineCap="round"
-        android:pathData="M40,38.5a22,22 0,1 0,28 0">
-        <aapt:attr name="android:strokeColor">
-            <gradient
-                android:type="linear"
-                android:startX="32"
-                android:startY="36"
-                android:endX="76"
-                android:endY="76"
-                android:startColor="#FF9B7BFF"
-                android:endColor="#FF36D1DC" />
-        </aapt:attr>
-    </path>
-    <path
-        android:strokeWidth="5"
-        android:strokeLineCap="round"
-        android:strokeColor="#FFFFFFFF"
-        android:pathData="M54,30L54,52" />
+    <!-- Бумажный самолётик пробивает знак «запрещено» РКН. Исходник: art/icon.svg. -->
+    <group
+        android:scaleX="0.16071"
+        android:scaleY="0.16071"
+        android:translateX="12.8571"
+        android:translateY="12.8571">
+        <!-- Мягкое свечение знака: широкие полупрозрачные обводки. -->
+        <path
+            android:pathData="M256,106a150,150 0,1 1,0 300a150,150 0,1 1,0 -300"
+            android:strokeColor="#FFFF5C7A"
+            android:strokeWidth="70"
+            android:strokeAlpha="0.10" />
+        <path
+            android:pathData="M256,106a150,150 0,1 1,0 300a150,150 0,1 1,0 -300"
+            android:strokeColor="#FFFF5C7A"
+            android:strokeWidth="52"
+            android:strokeAlpha="0.18" />
+        <!-- Знак «запрещено» с разломанной полосой. -->
+        <path
+            android:pathData="M256,106a150,150 0,1 1,0 300a150,150 0,1 1,0 -300"
+            android:strokeWidth="36">
+            <aapt:attr name="android:strokeColor">
+                <gradient android:type="linear" android:startX="106" android:startY="106" android:endX="406" android:endY="406">
+                    <item android:offset="0" android:color="#FFFF7A8F" />
+                    <item android:offset="1" android:color="#FFD9294E" />
+                </gradient>
+            </aapt:attr>
+        </path>
+        <path
+            android:pathData="M162.7,137.2L233.4,207.9L216.4,207.9L217.8,226.3L200.8,226.3L137.2,162.7Z">
+            <aapt:attr name="android:fillColor">
+                <gradient android:type="linear" android:startX="106" android:startY="106" android:endX="406" android:endY="406">
+                    <item android:offset="0" android:color="#FFFF7A8F" />
+                    <item android:offset="1" android:color="#FFD9294E" />
+                </gradient>
+            </aapt:attr>
+        </path>
+        <path
+            android:pathData="M304.1,278.6L374.8,349.3L349.3,374.8L285.7,311.2L285.7,294.2L304.1,295.6Z">
+            <aapt:attr name="android:fillColor">
+                <gradient android:type="linear" android:startX="106" android:startY="106" android:endX="406" android:endY="406">
+                    <item android:offset="0" android:color="#FFFF7A8F" />
+                    <item android:offset="1" android:color="#FFD9294E" />
+                </gradient>
+            </aapt:attr>
+        </path>
+        <path
+            android:pathData="M254.6,206.5L268.7,209.3L256.7,218.5Z"
+            android:fillColor="#FFFF6F86" />
+        <path
+            android:pathData="M253.2,301.3L264.5,306.9L250.3,312.6Z"
+            android:fillColor="#FFFF6F86" />
+        <path
+            android:pathData="M210.7,261.7L212.2,274.4L200.8,265.9Z"
+            android:fillColor="#FFFF6F86" />
+        <!-- След и бумажный самолётик. -->
+        <path
+            android:pathData="M60,470L226,292L256,322Z">
+            <aapt:attr name="android:fillColor">
+                <gradient android:type="linear" android:startX="60" android:startY="470" android:endX="240" android:endY="306">
+                    <item android:offset="0" android:color="#0036D1DC" />
+                    <item android:offset="1" android:color="#8C36D1DC" />
+                </gradient>
+            </aapt:attr>
+        </path>
+        <path
+            android:pathData="M392,120L130,248L226,292Z">
+            <aapt:attr name="android:fillColor">
+                <gradient android:type="linear" android:startX="150" android:startY="120" android:endX="330" android:endY="392">
+                    <item android:offset="0" android:color="#FFB49CFF" />
+                    <item android:offset="0.5" android:color="#FF7C5CFF" />
+                    <item android:offset="1" android:color="#FF36D1DC" />
+                </gradient>
+            </aapt:attr>
+        </path>
+        <path
+            android:pathData="M392,120L130,248L226,292Z"
+            android:fillColor="#FFFFFFFF"
+            android:fillAlpha="0.18" />
+        <path
+            android:pathData="M392,120L226,292L286,392Z">
+            <aapt:attr name="android:fillColor">
+                <gradient android:type="linear" android:startX="150" android:startY="120" android:endX="330" android:endY="392">
+                    <item android:offset="0" android:color="#FFB49CFF" />
+                    <item android:offset="0.5" android:color="#FF7C5CFF" />
+                    <item android:offset="1" android:color="#FF36D1DC" />
+                </gradient>
+            </aapt:attr>
+        </path>
+        <path
+            android:pathData="M392,120L226,292L286,392Z"
+            android:fillColor="#FF000000"
+            android:fillAlpha="0.18" />
+        <path
+            android:pathData="M226,292L240,352L262,334Z"
+            android:fillColor="#FF4A33C8" />
+    </group>
 </vector>
