@@ -131,6 +131,9 @@ fun SettingsScreen(
         SectionTitle("Авто-режим")
         AutoPanel(settings.auto) { transform -> onUpdate(true) { it.copy(auto = transform(it.auto)) } }
 
+        SectionTitle("Пинг и проверки")
+        ChecksPanel(settings.checks, onChecks)
+
         SectionTitle("Аккаунт sub-lab")
         AccountPanel(settings, accountBusy, onLogin, onSync, onLogout)
 
