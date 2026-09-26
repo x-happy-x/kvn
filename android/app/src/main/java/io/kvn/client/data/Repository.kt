@@ -286,6 +286,7 @@ class Repository(private val context: Context) {
                 muxConcurrency = prefs.getInt("muxConcurrency", BypassOptions().muxConcurrency),
             ),
             tilePrompted = prefs.getBoolean("tilePrompted", false),
+            clipboardImport = prefs.getBoolean("clipboardImport", true),
         )
     }
 
@@ -320,6 +321,7 @@ class Repository(private val context: Context) {
             .putBoolean("mux", settings.bypass.mux)
             .putInt("muxConcurrency", settings.bypass.muxConcurrency)
             .putBoolean("tilePrompted", settings.tilePrompted)
+            .putBoolean("clipboardImport", settings.clipboardImport)
             .apply()
     }
 }

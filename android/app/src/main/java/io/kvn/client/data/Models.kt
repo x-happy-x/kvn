@@ -220,6 +220,8 @@ data class AppSettings(
     val bypass: BypassOptions = BypassOptions(),
     /** Предложение добавить плитку в шторку уже показывали. */
     val tilePrompted: Boolean = false,
+    /** Открывать окно добавления, если в буфере обмена ссылка клиента или сервера. */
+    val clipboardImport: Boolean = true,
 ) {
     /** Настройки в формате libcore Options. */
     fun coreOptions(mtu: Int): String = JSONObject().apply {

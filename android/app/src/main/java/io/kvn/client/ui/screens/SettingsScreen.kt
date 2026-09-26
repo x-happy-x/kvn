@@ -36,6 +36,7 @@ import androidx.compose.material.icons.rounded.Sync
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.Wifi
 import androidx.compose.material.icons.rounded.ContentCut
+import androidx.compose.material.icons.rounded.ContentPaste
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.Layers
 import androidx.compose.material.icons.rounded.ToggleOn
@@ -171,9 +172,16 @@ fun SettingsScreen(
             ValueRow(Icons.Rounded.Tune, "Уровень журнала", settings.logLevel) { editing = EditField.LOG_LEVEL }
         }
 
-        if (onAddTile != null) {
-            SectionTitle("Быстрый доступ")
-            Panel(Modifier.fillMaxWidth()) {
+        SectionTitle("Быстрый доступ")
+        Panel(Modifier.fillMaxWidth()) {
+            ToggleRow(
+                Icons.Rounded.ContentPaste,
+                "Ссылки из буфера обмена",
+                "Скопированная happ://, clash://, vless://… сразу открывает окно добавления",
+                settings.clipboardImport,
+            ) { value -> onUpdate(false) { it.copy(clipboardImport = value) } }
+            if (onAddTile != null) {
+                Divider()
                 ValueRow(Icons.Rounded.ToggleOn, "Плитка в шторке", "Включать и выключать VPN из панели быстрых настроек", onAddTile)
             }
         }

@@ -2,6 +2,8 @@ package io.kvn.client
 
 import android.Manifest
 import android.app.StatusBarManager
+import android.content.ClipDescription
+import android.content.ClipboardManager
 import android.content.ComponentName
 import android.graphics.drawable.Icon
 import android.content.Intent
@@ -64,6 +66,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.kvn.client.core.Engine
+import io.kvn.client.data.DeepLinks
 import io.kvn.client.data.ImportRequest
 import io.kvn.client.ui.MainViewModel
 import io.kvn.client.ui.screens.AddSubscriptionSheet
@@ -137,6 +140,34 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         refreshPermissions()
+    }
+
+    /**
+     * Буфер обмена Android отдаёт только окну в фокусе, поэтому проверяем его
+     * здесь, а не в onResume.
+     */
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) checkClipboard()
+    }
+
+    /**
+     * Скопированная ссылка клиента (happ://, clash://…) или сервера (vless://…)
+     * сразу открывает окно добавления, как в Happ. Одну и ту же ссылку
+     * предлагаем один раз.
+     */
+    private fun checkClipboard() {
+        if (!viewModel.settings.value.clipboardImport || pendingImport.value != null) return
+        val manager = getSystemService(ClipboardManager::class.java) ?: return
+        val description = manager.primaryClipDescription ?: return
+        if (!description.hasMimeType(ClipDescription.MIMETYPE_TEXT_PLAIN) && !description.hasMimeType(ClipDescription.MIMETYPE_TEXT_URILIST)) return
+        val text = runCatching { manager.primaryClip?.getItemAt(0)?.coerceToText(this)?.toString() }.getOrNull()?.trim() ?: return
+        if (text.length > 64 * 1024 || !DeepLinks.isSupported(text)) return
+        val prefs = getSharedPreferences("clipboard", MODE_PRIVATE)
+        val fingerprint = text.hashCode().toString()
+        if (prefs.getString("last", null) == fingerprint) return
+        prefs.edit().putString("last", fingerprint).apply()
+        viewModel.parseImport(text)?.let { pendingImport.value = it.copy(client = "буфера обмена (${it.client})") }
     }
 
     override fun onNewIntent(intent: Intent) {
