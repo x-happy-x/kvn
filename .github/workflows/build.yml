@@ -79,10 +79,9 @@ jobs:
           echo "VERSION_NAME=$name" >> "$GITHUB_ENV"
           echo "VERSION_CODE=$((1000 + GITHUB_RUN_NUMBER))" >> "$GITHUB_ENV"
 
+      # ANDROID_HOME задан в окружении раннера, а не в контексте env.* workflow.
       - name: libcore.aar
-        env:
-          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/${{ env.NDK_VERSION }}
-        run: ./build-core.sh
+        run: ANDROID_NDK_HOME="$ANDROID_HOME/ndk/$NDK_VERSION" ./build-core.sh
 
       # Без секретов APK подписывается debug-ключом раннера: он новый на каждой
       # сборке, поэтому поверх такой версии следующая не встанет.
