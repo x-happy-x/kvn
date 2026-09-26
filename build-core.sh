@@ -22,13 +22,16 @@ gomobile init
 
 mkdir -p "$root/android/app/libs"
 # with_gvisor — gVisor-стек для TUN у mihomo (у xray-core он встроен).
+# -checklinkname=0: github.com/wlynxg/anet (pion/WebRTC для olcrtc в форке mihomo)
+# на Android берёт net.zoneCache через go:linkname, а Go 1.23+ такое по
+# умолчанию запрещает при линковке.
 gomobile bind \
   -v \
   -target="$targets" \
   -androidapi 26 \
   -tags with_gvisor \
   -trimpath \
-  -ldflags="-s -w -buildid=" \
+  -ldflags="-s -w -buildid= -checklinkname=0" \
   -o "$root/android/app/libs/libcore.aar" \
   .
 
