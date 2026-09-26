@@ -1,0 +1,158 @@
+name: Build
+
+# PR и ветки — тесты и сборка APK (в артефактах запуска).
+# Push в main — ещё и пререлиз `nightly`, который пересоздаётся на каждом коммите.
+# Тег vX.Y.Z — релиз с APK под все архитектуры.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  NDK_VERSION: "27.2.12479018"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: core/go.mod
+          cache-dependency-path: core/go.sum
+
+      - name: Unit tests
+        working-directory: core
+        run: go test -tags with_gvisor ./...
+
+      - name: End-to-end через TUN (xray ⇄ mihomo)
+        run: |
+          sudo -E env "PATH=$PATH" "HOME=$HOME" \
+            "GOPATH=$(go env GOPATH)" "GOCACHE=$(go env GOCACHE)" "GOMODCACHE=$(go env GOMODCACHE)" \
+            ./core/e2e.sh
+
+  apk:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    outputs:
+      version: ${{ steps.version.outputs.name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: core/go.mod
+          cache-dependency-path: core/go.sum
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: android-actions/setup-android@v3
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Android SDK
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;${NDK_VERSION}"
+
+      - name: Version
+        id: version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            name="${GITHUB_REF_NAME#v}"
+          else
+            name="0.1.0-dev.${GITHUB_RUN_NUMBER}+${GITHUB_SHA::7}"
+          fi
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "VERSION_NAME=$name" >> "$GITHUB_ENV"
+          echo "VERSION_CODE=$((1000 + GITHUB_RUN_NUMBER))" >> "$GITHUB_ENV"
+
+      - name: libcore.aar
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/${{ env.NDK_VERSION }}
+        run: ./build-core.sh
+
+      # Без секретов APK подписывается debug-ключом раннера: он новый на каждой
+      # сборке, поэтому поверх такой версии следующая не встанет.
+      - name: Signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::warning::Секрет KEYSTORE_BASE64 не задан — APK подписан debug-ключом"
+            exit 0
+          fi
+          echo "$KEYSTORE_BASE64" | base64 -d > android/release.jks
+          cat > android/keystore.properties <<EOF
+          storeFile=release.jks
+          storePassword=$KEYSTORE_PASSWORD
+          keyAlias=$KEY_ALIAS
+          keyPassword=${KEY_PASSWORD:-$KEYSTORE_PASSWORD}
+          EOF
+
+      - name: APK
+        working-directory: android
+        run: ./gradlew --no-daemon assembleRelease
+
+      - name: Collect APK
+        run: |
+          mkdir -p dist
+          for apk in android/app/build/outputs/apk/release/*.apk; do
+            abi=$(basename "$apk" .apk | sed -e 's/^app-//' -e 's/-release$//')
+            cp "$apk" "dist/kvn-${VERSION_NAME%%+*}-${abi}.apk"
+          done
+          (cd dist && sha256sum *.apk > SHA256SUMS)
+          ls -l dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kvn-apk
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    needs: apk
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: kvn-apk
+          path: dist
+
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: KVN ${{ needs.apk.outputs.version }}
+          files: dist/*
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+
+      - name: Nightly
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release delete nightly --cleanup-tag --yes || true
+          gh release create nightly dist/* \
+            --prerelease \
+            --target "$GITHUB_SHA" \
+            --title "KVN nightly ${{ needs.apk.outputs.version }}" \
+            --notes "Сборка из main, коммит ${GITHUB_SHA::7}. Для постоянной установки берите релизы с тегом vX.Y.Z."

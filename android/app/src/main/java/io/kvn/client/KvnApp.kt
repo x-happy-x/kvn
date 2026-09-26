@@ -1,0 +1,22 @@
+package io.kvn.client
+
+import android.app.Application
+import io.kvn.client.core.CoreBridge
+import io.kvn.client.data.Repository
+
+class KvnApp : Application() {
+    lateinit var repository: Repository
+        private set
+
+    override fun onCreate() {
+        super.onCreate()
+        instance = this
+        CoreBridge.init(filesDir.resolve("core").absolutePath)
+        repository = Repository(this)
+    }
+
+    companion object {
+        lateinit var instance: KvnApp
+            private set
+    }
+}
