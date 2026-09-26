@@ -244,7 +244,7 @@ fun ServersScreen(
                     )
                   }
                 }
-                if (subscription.collapsed) return@forEach
+                if (subscription.collapsed) return@forEachIndexed
                 items(subscription.visibleNodes(engine), key = { it.id }) { node ->
                     // statsVersion — ключ перечитывания статистики после новой серии пингов.
                     val record = remember(node.id, statsVersion) { pingRecord(node) }

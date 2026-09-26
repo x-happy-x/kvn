@@ -39,6 +39,8 @@ object Whitelist {
     /**
      * Приложения, которые обычно работают в белых списках и не любят VPN.
      * В списке на экране приложений показываются только установленные.
+     * Браузеров здесь нет (Яндекс Браузер, Яндекс с Алисой): через них
+     * открываются любые сайты, и исключение увело бы их мимо VPN.
      */
     val PRESET_APPS: List<PresetApp> = listOf(
         PresetApp("ru.sberbankmobile", "СберБанк Онлайн"),
@@ -55,8 +57,6 @@ object Whitelist {
         PresetApp("ru.ok.android", "Одноклассники"),
         PresetApp("ru.mail.mailapp", "Почта Mail.ru"),
         PresetApp("ru.vk.store", "RuStore"),
-        PresetApp("ru.yandex.searchplugin", "Яндекс с Алисой"),
-        PresetApp("com.yandex.browser", "Яндекс Браузер"),
         PresetApp("ru.yandex.yandexmaps", "Яндекс Карты"),
         PresetApp("ru.yandex.taxi", "Яндекс Go"),
         PresetApp("ru.yandex.music", "Яндекс Музыка"),
