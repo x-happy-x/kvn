@@ -207,6 +207,7 @@ fun ScanScreen(
 
         val ordered = targets.sortedByDescending { verdictRank(results[it]?.verdict) }
         items(ordered, key = { it }) { target ->
+          Box(Modifier.animateItem()) {
             TargetCard(
                 target = target,
                 result = results[target],
@@ -216,6 +217,7 @@ fun ScanScreen(
                 onRun = { onRunOne(target) },
                 onRemove = { onRemove(target) },
             )
+          }
         }
     }
 }
@@ -477,7 +479,9 @@ private fun ServersCheck(
                 )
             }
         }
-        items(ordered, key = { it.id }) { node -> NodeTestRow(node, tests[node.id], progress.running) }
+        items(ordered, key = { it.id }) { node ->
+            Box(Modifier.animateItem()) { NodeTestRow(node, tests[node.id], progress.running) }
+        }
     }
 }
 

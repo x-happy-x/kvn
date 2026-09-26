@@ -35,7 +35,10 @@ import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Sync
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.Wifi
+import androidx.compose.material.icons.rounded.AutoMode
 import androidx.compose.material.icons.rounded.ContentCut
+import androidx.compose.material.icons.rounded.HealthAndSafety
+import androidx.compose.material.icons.rounded.SwapHoriz
 import androidx.compose.material.icons.rounded.ContentPaste
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.Layers
@@ -66,6 +69,7 @@ import androidx.compose.ui.unit.sp
 import io.kvn.client.core.Engine
 import io.kvn.client.data.AppMode
 import io.kvn.client.data.AppSettings
+import io.kvn.client.data.AutoOptions
 import io.kvn.client.data.BypassOptions
 import io.kvn.client.data.Mimicry
 import io.kvn.client.data.WifiMode
@@ -135,6 +139,9 @@ fun SettingsScreen(
                 }
             }
         }
+
+        SectionTitle("Авто-режим")
+        AutoPanel(settings.auto) { transform -> onUpdate(true) { it.copy(auto = transform(it.auto)) } }
 
         SectionTitle("Аккаунт sub-lab")
         AccountPanel(settings, accountBusy, onLogin, onSync, onLogout)
@@ -512,5 +519,77 @@ private fun ParamRow(title: String, value: String, onClick: () -> Unit) {
     ) {
         Text(title, color = Palette.TextSecondary, fontSize = 13.sp, modifier = Modifier.weight(1f))
         Text(value, color = Palette.VioletSoft, fontSize = 13.sp, fontFamily = FontFamily.Monospace)
+    }
+}
+
+/**
+ * Авто-режим: лучший сервер при подключении, проверка соединения каждые N
+ * минут и переключение на другой сервер, если текущий перестал отвечать.
+ */
+@Composable
+private fun AutoPanel(auto: AutoOptions, onChange: ((AutoOptions) -> AutoOptions) -> Unit) {
+    var picking by remember { mutableStateOf<String?>(null) }
+    Panel(Modifier.fillMaxWidth()) {
+        ToggleRow(
+            Icons.Rounded.AutoMode,
+            "Лучший сервер при подключении",
+            "По истории пингов, с проверкой, что через сервер открываются сайты",
+            auto.selectBest,
+        ) { value -> onChange { it.copy(selectBest = value) } }
+        if (auto.selectBest) {
+            ParamRow("Где искать", if (auto.allSubscriptions) "во всех подписках" else "в подписке сервера") {
+                onChange { it.copy(allSubscriptions = !it.allSubscriptions) }
+            }
+        }
+        Divider()
+        ToggleRow(
+            Icons.Rounded.HealthAndSafety,
+            "Проверять соединение",
+            "Периодически открывать страницу через VPN",
+            auto.healthCheck,
+        ) { value -> onChange { it.copy(healthCheck = value) } }
+        if (auto.healthCheck) {
+            ParamRow("Интервал", "каждые ${auto.intervalMinutes} мин") { picking = "interval" }
+            ParamRow("Нерабочий после", "${auto.failures} ${io.kvn.client.ui.components.plural(auto.failures.toLong(), "неудачи", "неудач", "неудач")} подряд") { picking = "failures" }
+            Divider()
+            ToggleRow(
+                Icons.Rounded.SwapHoriz,
+                "Переключаться на другой сервер",
+                "Если текущий перестал отвечать — найти рабочий и подключиться",
+                auto.failover,
+            ) { value -> onChange { it.copy(failover = value) } }
+        }
+    }
+    picking?.let { kind ->
+        val options = if (kind == "interval") listOf(1, 2, 5, 10, 15, 30, 60) else listOf(1, 2, 3, 5, 10)
+        val current = if (kind == "interval") auto.intervalMinutes else auto.failures
+        AlertDialog(
+            onDismissRequest = { picking = null },
+            containerColor = Palette.SurfaceHigh,
+            title = { Text(if (kind == "interval") "Проверять каждые" else "Нерабочий после") },
+            text = {
+                Column {
+                    if (kind == "failures") {
+                        Text(
+                            "После первой неудачи повторные проверки идут каждые 20 секунд.",
+                            color = Palette.TextSecondary,
+                            fontSize = 13.sp,
+                        )
+                    }
+                    options.forEach { value ->
+                        TextButton(onClick = {
+                            picking = null
+                            onChange { if (kind == "interval") it.copy(intervalMinutes = value) else it.copy(failures = value) }
+                        }) {
+                            Text(
+                                if (kind == "interval") "$value мин" else "$value ${io.kvn.client.ui.components.plural(value.toLong(), "неудачи", "неудач", "неудач")} подряд",
+                                color = if (value == current) Palette.VioletSoft else Palette.TextPrimary,
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { picking = null }) { Text("Закрыть") } },
+        )
     }
 }

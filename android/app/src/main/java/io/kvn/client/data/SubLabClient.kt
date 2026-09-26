@@ -1,8 +1,8 @@
 package io.kvn.client.data
 
 import org.json.JSONObject
-import java.net.HttpURLConnection
-import java.net.URL
+import java.net.IDN
+import java.net.URI
 
 /** Подписка из списка пользователя sub-lab (`GET /api/favorites`). */
 data class SubLabSubscription(
@@ -28,12 +28,25 @@ class SubLabException(message: String, val status: Int = 0) : Exception(message)
  * как любые другие — с заголовками Happ или FlClashX.
  */
 object SubLabClient {
-    /** `sub.example.com` → `https://sub.example.com`. */
+    /**
+     * Адрес sub-lab в любом виде — `sub.example.com`, полная ссылка на подписку
+     * `https://sub.example.com/l/abc`, с пробелами или кириллицей — в origin
+     * вида `https://sub.example.com`.
+     */
     fun normalizeServer(input: String): String {
-        val trimmed = input.trim().trimEnd('/')
-        if (trimmed.isEmpty()) return ""
-        return if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) trimmed else "https://$trimmed"
+        var text = input.trim().filterNot { it.isWhitespace() }.trimEnd('/')
+        if (text.isEmpty()) return ""
+        if (!text.startsWith("http://", ignoreCase = true) && !text.startsWith("https://", ignoreCase = true)) text = "https://$text"
+        val uri = runCatching { URI(text) }.getOrNull() ?: return Http.normalizeUrl(text)
+        val host = uri.host ?: return Http.normalizeUrl(text)
+        val ascii = runCatching { IDN.toASCII(host, IDN.ALLOW_UNASSIGNED) }.getOrDefault(host).lowercase()
+        val port = if (uri.port > 0) ":${uri.port}" else ""
+        return "${uri.scheme.lowercase()}://$ascii$port"
     }
+
+    /** Похожа ли ссылка на короткую ссылку sub-lab (`/l/<id>`) — по ней можно угадать адрес сервера. */
+    fun serverFromSubscriptionUrl(url: String): String? =
+        if (Regex("^https?://[^/]+/l/[A-Za-z0-9_-]+").containsMatchIn(url.trim())) normalizeServer(url) else null
 
     fun login(server: String, login: String, password: String): SubLabLogin {
         val body = JSONObject().put("login", login).put("password", password)
@@ -71,38 +84,27 @@ object SubLabClient {
     }
 
     private fun request(method: String, url: String, token: String?, body: JSONObject?): JSONObject {
-        val connection = (URL(url).openConnection() as HttpURLConnection).apply {
-            requestMethod = method
-            connectTimeout = 15_000
-            readTimeout = 20_000
-            setRequestProperty("Accept", "application/json")
-            if (token != null) setRequestProperty("Authorization", "Bearer $token")
-            if (body != null) {
-                doOutput = true
-                setRequestProperty("Content-Type", "application/json; charset=utf-8")
-            }
+        val headers = buildMap {
+            put("Accept", "application/json")
+            if (token != null) put("Authorization", "Bearer $token")
+            if (body != null) put("Content-Type", "application/json; charset=utf-8")
         }
-        try {
-            if (body != null) {
-                connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
-            }
-            val code = connection.responseCode
-            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
-            val text = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
-            val json = runCatching { JSONObject(text) }.getOrElse { JSONObject() }
-            if (code !in 200..299) {
-                val message = json.optString("error").ifEmpty {
-                    when (code) {
-                        401 -> "Сессия sub-lab истекла — войдите заново"
-                        404 -> "Этот сервер sub-lab не поддерживает вход из приложения — обновите sub-lab"
-                        else -> "sub-lab ответил $code"
-                    }
+        val response = try {
+            Http.request(method, url, headers, body?.toString())
+        } catch (error: Exception) {
+            throw SubLabException(error.message ?: "sub-lab недоступен")
+        }
+        val json = runCatching { JSONObject(response.body) }.getOrElse { JSONObject() }
+        if (response.status !in 200..299) {
+            val message = json.optString("error").ifEmpty {
+                when (response.status) {
+                    401 -> "Сессия sub-lab истекла — войдите заново"
+                    404 -> "По этому адресу нет sub-lab с входом из приложения: проверьте адрес или обновите sub-lab"
+                    else -> "sub-lab ответил ${response.status}"
                 }
-                throw SubLabException(message, code)
             }
-            return json
-        } finally {
-            connection.disconnect()
+            throw SubLabException(message, response.status)
         }
+        return json
     }
 }

@@ -83,7 +83,39 @@ fun PowerButton(state: PowerState, onClick: () -> Unit, modifier: Modifier = Mod
         label = "icon",
     )
 
+    // Расходящиеся волны: при подключении — частые, при работе — редкие и мягкие.
+    val waves = state == PowerState.ON || state == PowerState.CONNECTING
+    val wave by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(if (state == PowerState.CONNECTING) 1400 else 2600, easing = LinearEasing)),
+        label = "wave",
+    )
+    val pressScale by animateFloatAsState(
+        targetValue = when (state) {
+            PowerState.ON -> 1f
+            PowerState.CONNECTING -> 0.96f
+            else -> 0.98f
+        },
+        animationSpec = androidx.compose.animation.core.spring(dampingRatio = 0.45f, stiffness = 300f),
+        label = "scale",
+    )
+
     Box(modifier = modifier.size(size * 1.45f), contentAlignment = Alignment.Center) {
+        if (waves) {
+            Canvas(Modifier.fillMaxSize()) {
+                val base = size.toPx() / 2
+                val reach = this.size.minDimension / 2 - base
+                for (offset in listOf(0f, 0.5f)) {
+                    val progress = (wave + offset) % 1f
+                    drawCircle(
+                        color = glowColor.copy(alpha = (1f - progress) * 0.35f),
+                        radius = base + reach * progress,
+                        style = Stroke(width = 2.dp.toPx() * (1f - progress) + 0.5f),
+                    )
+                }
+            }
+        }
         // Свечение.
         Canvas(
             Modifier
@@ -136,6 +168,7 @@ fun PowerButton(state: PowerState, onClick: () -> Unit, modifier: Modifier = Mod
         Box(
             modifier = Modifier
                 .size(size)
+                .scale(pressScale)
                 .clip(CircleShape)
                 .background(fill)
                 .border(1.dp, Color.White.copy(alpha = 0.06f), CircleShape)

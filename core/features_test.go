@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -183,4 +184,29 @@ func freeTCPPort(t *testing.T) int {
 	}
 	defer listener.Close()
 	return listener.Addr().(*net.TCPAddr).Port
+}
+
+func TestHTTPFetchAndCheckConnection(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Subscription-Userinfo", "upload=1; download=2")
+		_, _ = io.WriteString(w, r.Method+" "+r.Header.Get("User-Agent"))
+	}))
+	defer server.Close()
+	payload, err := HTTPFetch("POST", server.URL+"/x", `{"User-Agent":"Happ/3.10.0"}`, "{}", 5000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result fetchResult
+	if err := json.Unmarshal([]byte(payload), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != 200 || result.Body != "POST Happ/3.10.0" || result.Headers["subscription-userinfo"] == "" {
+		t.Fatalf("%+v", result)
+	}
+	if _, err := HTTPFetch("GET", "http://kvn-nonexistent.invalid/", "", "", 3000); err == nil || !strings.Contains(err.Error(), "kvn-nonexistent.invalid") {
+		t.Fatalf("ждали понятную ошибку DNS с именем хоста, получили %v", err)
+	}
+	if _, err := CheckConnection("", 1000); err == nil {
+		t.Fatal("без запущенного ядра проверка должна падать")
+	}
 }

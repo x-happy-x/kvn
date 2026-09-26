@@ -19,7 +19,18 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
-import androidx.compose.animation.Crossfade
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandHorizontally
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkHorizontally
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -69,6 +80,7 @@ import io.kvn.client.core.Engine
 import io.kvn.client.data.DeepLinks
 import io.kvn.client.data.ImportRequest
 import io.kvn.client.ui.MainViewModel
+import io.kvn.client.ui.components.uiSpring
 import io.kvn.client.ui.screens.AddSubscriptionSheet
 import io.kvn.client.ui.screens.AppsScreen
 import io.kvn.client.ui.screens.HomeScreen
@@ -293,6 +305,7 @@ private fun App(
     val nodeTests by viewModel.nodeTests.collectAsStateWithLifecycle()
     val nodeTestProgress by viewModel.nodeTestProgress.collectAsStateWithLifecycle()
     val statsVersion by viewModel.statsVersion.collectAsStateWithLifecycle()
+    val sheetError by viewModel.sheetError.collectAsStateWithLifecycle()
 
     var tab by rememberSaveable { mutableStateOf(Tab.HOME) }
     var overlay by rememberSaveable { mutableStateOf(Overlay.NONE) }
@@ -346,7 +359,21 @@ private fun App(
                 .statusBarsPadding()
                 .padding(bottom = padding.calculateBottomPadding()),
         ) {
-            when (overlay) {
+            // Экраны поверх вкладок выезжают справа, вкладки сменяются в сторону перехода.
+            AnimatedContent(
+                targetState = overlay,
+                transitionSpec = {
+                    if (targetState != Overlay.NONE) {
+                        (slideInHorizontally(tween(320)) { it } + fadeIn(tween(320))) togetherWith
+                            (slideOutHorizontally(tween(320)) { -it / 4 } + fadeOut(tween(220)))
+                    } else {
+                        (slideInHorizontally(tween(320)) { -it / 4 } + fadeIn(tween(320))) togetherWith
+                            (slideOutHorizontally(tween(320)) { it } + fadeOut(tween(220)))
+                    }
+                },
+                label = "overlay",
+            ) { currentOverlay ->
+            when (currentOverlay) {
                 Overlay.APPS -> {
                     LaunchedEffect(Unit) { viewModel.loadApps() }
                     AppsScreen(
@@ -374,7 +401,16 @@ private fun App(
                     onRequestLocation = onRequestLocation,
                     onRequestBackgroundLocation = onRequestBackgroundLocation,
                 )
-                Overlay.NONE -> Crossfade(targetState = tab, label = "tab") { current ->
+                Overlay.NONE -> AnimatedContent(
+                    targetState = tab,
+                    transitionSpec = {
+                        val forward = targetState.ordinal > initialState.ordinal
+                        val direction = if (forward) 1 else -1
+                        (slideInHorizontally(tween(300)) { direction * it / 5 } + fadeIn(tween(300))) togetherWith
+                            (slideOutHorizontally(tween(300)) { -direction * it / 5 } + fadeOut(tween(200)))
+                    },
+                    label = "tab",
+                ) { current ->
                     when (current) {
                         Tab.HOME -> HomeScreen(
                             state = state,
@@ -383,6 +419,7 @@ private fun App(
                             ping = node?.let { pings[it.id] },
                             subscription = subscriptions.firstOrNull { it.id == node?.subscriptionId },
                             traffic = traffic,
+                            auto = settings.auto.selectBest || (settings.auto.healthCheck && settings.auto.failover),
                             onToggle = onToggle,
                             onOpenSettings = { tab = Tab.SETTINGS },
                             onOpenServers = { tab = Tab.SERVERS },
@@ -444,11 +481,13 @@ private fun App(
                     }
                 }
             }
+            }
         }
     }
 
     if (adding) {
         val reset = {
+            viewModel.clearSheetError()
             adding = false
             addUrl = ""
             addName = ""
@@ -456,6 +495,7 @@ private fun App(
             addSource = ""
         }
         AddSubscriptionSheet(
+            error = sheetError,
             initialUrl = addUrl,
             initialName = addName,
             initialEngine = addEngine.ifEmpty { null }?.let { Engine.of(it) },
@@ -473,10 +513,14 @@ private fun App(
 
     if (loggingIn) {
         LoginSheet(
-            initialServer = settings.account.server,
+            initialServer = remember { viewModel.suggestedSubLabServer() },
             initialLogin = settings.account.username,
             busy = accountBusy,
-            onDismiss = { loggingIn = false },
+            error = sheetError,
+            onDismiss = {
+                viewModel.clearSheetError()
+                loggingIn = false
+            },
             onSubmit = { server, login, password ->
                 viewModel.subLabLogin(server, login, password) { loggingIn = false }
             },
@@ -504,11 +548,14 @@ private fun BottomBar(selected: Tab, onSelect: (Tab) -> Unit) {
         ) {
             Tab.entries.forEach { tab ->
                 val active = tab == selected
+                val weight by animateFloatAsState(if (active) 1.6f else 1f, uiSpring(), label = "tabWeight")
+                val pill by animateColorAsState(if (active) Palette.SurfaceHighest else Color.Transparent, tween(250), label = "tabPill")
+                val tint by animateColorAsState(if (active) Palette.VioletSoft else Palette.TextMuted, tween(250), label = "tabTint")
                 Row(
                     Modifier
-                        .weight(if (active) 1.6f else 1f)
+                        .weight(weight)
                         .clip(RoundedCornerShape(16.dp))
-                        .background(if (active) Palette.SurfaceHighest else Color.Transparent)
+                        .background(pill)
                         .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { onSelect(tab) }
                         .padding(vertical = 10.dp),
                     horizontalArrangement = Arrangement.Center,
@@ -517,12 +564,18 @@ private fun BottomBar(selected: Tab, onSelect: (Tab) -> Unit) {
                     Icon(
                         tab.icon,
                         contentDescription = tab.title,
-                        tint = if (active) Palette.VioletSoft else Palette.TextMuted,
+                        tint = tint,
                         modifier = Modifier.size(20.dp),
                     )
-                    if (active) {
-                        Spacer(Modifier.size(8.dp))
-                        Text(tab.title, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Palette.TextPrimary, maxLines = 1)
+                    AnimatedVisibility(
+                        visible = active,
+                        enter = fadeIn(tween(220)) + expandHorizontally(tween(260)),
+                        exit = fadeOut(tween(120)) + shrinkHorizontally(tween(200)),
+                    ) {
+                        Row {
+                            Spacer(Modifier.size(8.dp))
+                            Text(tab.title, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Palette.TextPrimary, maxLines = 1)
+                        }
                     }
                 }
             }

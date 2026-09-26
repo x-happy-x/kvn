@@ -1,6 +1,9 @@
 package io.kvn.client.ui.screens
 
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
@@ -49,7 +52,9 @@ import io.kvn.client.core.Engine
 import io.kvn.client.data.ServerNode
 import io.kvn.client.data.Subscription
 import io.kvn.client.ui.Traffic
+import io.kvn.client.ui.components.AppearIn
 import io.kvn.client.ui.components.FlagBadge
+import io.kvn.client.ui.components.RollingText
 import io.kvn.client.ui.components.Panel
 import io.kvn.client.ui.components.PingText
 import io.kvn.client.ui.components.PowerButton
@@ -71,6 +76,7 @@ fun HomeScreen(
     ping: Int?,
     subscription: Subscription?,
     traffic: Traffic,
+    auto: Boolean = false,
     onToggle: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenServers: () -> Unit,
@@ -90,24 +96,34 @@ fun HomeScreen(
             .padding(horizontal = 20.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Header(power, engine, onOpenSettings)
+        // Блоки появляются по очереди — экран «собирается», а не возникает целиком.
+        AppearIn(0) { Header(power, engine, auto, onOpenSettings) }
         Spacer(Modifier.height(20.dp))
 
-        PowerButton(state = power, onClick = onToggle)
+        AppearIn(1) { PowerButton(state = power, onClick = onToggle) }
 
-        StatusBlock(state)
+        AppearIn(2) { Column(horizontalAlignment = Alignment.CenterHorizontally) { StatusBlock(state) } }
         Spacer(Modifier.height(18.dp))
-        TrafficRow(traffic, active = power == PowerState.ON)
+        AppearIn(3) { TrafficRow(traffic, active = power == PowerState.ON) }
         Spacer(Modifier.height(22.dp))
 
-        if (node != null) {
-            ServerPanel(node, ping, engine, onOpenServers)
-        } else {
-            EmptyPanel(onAddSubscription)
+        AppearIn(4) {
+            // Смена сервера (в том числе авто-переключение) — плавным перелистыванием карточки.
+            AnimatedContent(
+                targetState = node,
+                transitionSpec = {
+                    (slideInVertically(tween(320)) { it / 3 } + fadeIn(tween(320))) togetherWith
+                        (slideOutVertically(tween(240)) { -it / 3 } + fadeOut(tween(200)))
+                },
+                contentKey = { it?.id },
+                label = "server",
+            ) { current ->
+                if (current != null) ServerPanel(current, ping, engine, onOpenServers) else EmptyPanel(onAddSubscription)
+            }
         }
         if (subscription != null && (subscription.total > 0 || subscription.expire > 0 || subscription.announce.isNotEmpty())) {
             Spacer(Modifier.height(12.dp))
-            SubscriptionPanel(subscription)
+            AppearIn(5) { SubscriptionPanel(subscription) }
         }
         Spacer(Modifier.height(24.dp))
     }
@@ -115,7 +131,7 @@ fun HomeScreen(
 
 /** Шапка: название и текущее ядро (переключается в настройках). */
 @Composable
-private fun Header(power: PowerState, engine: Engine, onOpenSettings: () -> Unit) {
+private fun Header(power: PowerState, engine: Engine, auto: Boolean, onOpenSettings: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -130,6 +146,19 @@ private fun Header(power: PowerState, engine: Engine, onOpenSettings: () -> Unit
         )
         Spacer(Modifier.width(10.dp))
         Text("KVN", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = Palette.TextPrimary, modifier = Modifier.weight(1f))
+        if (auto) {
+            Text(
+                "АВТО",
+                color = Palette.Cyan,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Palette.Cyan.copy(alpha = 0.12f))
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+            )
+            Spacer(Modifier.width(8.dp))
+        }
         Row(
             modifier = Modifier
                 .clip(RoundedCornerShape(12.dp))
@@ -231,7 +260,7 @@ private fun TrafficCell(icon: ImageVector, label: String, speed: String, total: 
             Spacer(Modifier.width(10.dp))
             Column {
                 Text(label, color = Palette.TextMuted, fontSize = 11.sp)
-                Text(speed, color = Palette.TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                RollingText(speed, color = Palette.TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
             }
         }
         if (total.isNotEmpty()) {

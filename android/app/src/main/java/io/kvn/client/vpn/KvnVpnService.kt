@@ -25,6 +25,8 @@ import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
@@ -55,6 +57,10 @@ class KvnVpnService : VpnService() {
     private var wifi: WifiMonitor? = null
     private var wifiJob: Job? = null
 
+    /** Периодическая проверка соединения (авто-режим). */
+    private var healthJob: Job? = null
+    private val selector by lazy { AutoSelector(KvnApp.instance.repository, KvnApp.instance.pingStats) }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
@@ -80,7 +86,31 @@ class KvnVpnService : VpnService() {
         val settings = KvnApp.instance.repository.settings.value
         val monitor = syncWifiMonitor(settings)
         val reason = monitor?.let { WifiMonitor.pauseReason(it.state.value, settings) }
-        if (reason != null) pause(reason) else connect(reuseTun)
+        if (reason != null) {
+            pause(reason)
+            return
+        }
+        // Перезапуск (смена ядра, сервера, правил) — выбор пользователя не трогаем.
+        if (!reuseTun) autoSelect()
+        connect(reuseTun)
+    }
+
+    /**
+     * Авто-режим: до подключения выбирает лучший сервер по статистике и
+     * проверяет его настоящим запросом. Туннеля ещё нет, а само приложение из
+     * него исключено, поэтому проверка идёт напрямую.
+     */
+    private suspend fun autoSelect() {
+        val repository = KvnApp.instance.repository
+        if (!repository.settings.value.auto.selectBest) return
+        VpnController.update(VpnState.Connecting)
+        promoteToForeground("Ищу лучший сервер…")
+        val best = selector.pickBest(around = repository.selectedNode())
+        if (best != null) {
+            repository.selectNode(best)
+        } else {
+            VpnController.notify("Авто-режим: ни один сервер не открыл страницу, подключаюсь к выбранному")
+        }
     }
 
     @OptIn(FlowPreview::class)
@@ -160,10 +190,63 @@ class KvnVpnService : VpnService() {
             CoreBridge.start(settings.engine, node.json, descriptor.fd, settings.coreOptions(MTU))
             VpnController.update(VpnState.Connected(System.currentTimeMillis(), settings.engine, node.title))
             promoteToForeground("${node.title} · ${settings.engine.title}")
+            startHealthLoop()
         } catch (error: Exception) {
             Log.e(TAG, "connect failed", error)
             fail(error.message ?: error.toString())
         }
+    }
+
+    /**
+     * Каждые N минут проверяет, что через VPN открываются сайты. После
+     * неудачи перепроверяет чаще; если сервер не ответил заданное число раз
+     * подряд — ищет другой рабочий сервер и переключается на него.
+     */
+    private fun startHealthLoop() {
+        healthJob?.cancel()
+        val auto = KvnApp.instance.repository.settings.value.auto
+        if (!auto.healthCheck) return
+        healthJob = scope.launch {
+            var failures = 0
+            while (isActive) {
+                delay(if (failures == 0) auto.intervalMinutes.coerceAtLeast(1) * 60_000L else RETRY_AFTER_FAILURE_MS)
+                if (VpnController.state.value !is VpnState.Connected) return@launch
+                val ok = runCatching { CoreBridge.checkConnection(timeoutMs = 10_000) }
+                    .onFailure { Log.w(TAG, "health check failed (${failures + 1}/${auto.failures}): ${it.message}") }
+                    .isSuccess
+                if (ok) {
+                    failures = 0
+                    continue
+                }
+                failures++
+                if (failures < auto.failures.coerceAtLeast(1)) continue
+                if (!auto.failover) {
+                    VpnController.notify("Сервер не отвечает уже ${failures} раз подряд")
+                    failures = 0
+                    continue
+                }
+                // Переключение — отдельной задачей: connect() перезапустит эту проверку.
+                scope.launch { lock.withLock { if (enabled) failover() } }
+                return@launch
+            }
+        }
+    }
+
+    private suspend fun failover() {
+        val repository = KvnApp.instance.repository
+        val current = repository.selectedNode() ?: return
+        current.let { KvnApp.instance.pingStats.record(it, false, 0) }
+        promoteToForeground("«${current.title}» не отвечает — ищу другой сервер…")
+        val next = selector.pickBest(exclude = setOf(current.id), around = current)
+        if (next == null) {
+            VpnController.notify("«${current.title}» не отвечает, а рабочих серверов не нашлось — попробую позже")
+            promoteToForeground("${current.title} · не отвечает")
+            startHealthLoop()
+            return
+        }
+        repository.selectNode(next)
+        VpnController.notify("«${current.title}» не отвечал — переключился на «${next.title}»")
+        connect(reuseTun = true)
     }
 
     private fun openTun(settings: AppSettings): ParcelFileDescriptor {
@@ -231,6 +314,8 @@ class KvnVpnService : VpnService() {
     }
 
     private fun releaseTun() {
+        healthJob?.cancel()
+        healthJob = null
         runCatching { CoreBridge.stop() }.onFailure { Log.w(TAG, "core stop", it) }
         runCatching { tun?.close() }
         tun = null
@@ -298,6 +383,7 @@ class KvnVpnService : VpnService() {
         const val ACTION_STOP = "io.kvn.client.STOP"
 
         private const val TAG = "KvnVpn"
+        private const val RETRY_AFTER_FAILURE_MS = 20_000L
         private const val CHANNEL_ID = "vpn"
         private const val NOTIFICATION_ID = 1
         private const val MTU = 1500

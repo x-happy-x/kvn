@@ -52,6 +52,13 @@ object CoreBridge {
 
     fun isHappCrypt5(value: String): Boolean = Libcore.isHappCrypt5(value)
 
+    /** Проверка, что работающий VPN пропускает трафик; время ответа в мс. */
+    fun checkConnection(url: String = "", timeoutMs: Int = 8000): Int = Libcore.checkConnection(url, timeoutMs)
+
+    /** HTTP-запрос с запасным DNS (если системный не находит имя). Ответ — JSON. */
+    fun httpFetch(method: String, url: String, headersJson: String, body: String, timeoutMs: Int): String =
+        Libcore.httpFetch(method, url, headersJson, body, timeoutMs)
+
     /** happ://crypt5/… → обычная ссылка. */
     fun decryptHapp(link: String): String = Libcore.decryptHapp(link)
 

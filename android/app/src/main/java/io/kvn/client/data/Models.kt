@@ -110,8 +110,21 @@ data class Subscription(
     /** Ядро, на котором работают серверы подписки при текущем ядре приложения. */
     fun effectiveEngine(current: Engine): Engine = engine ?: current
 
-    /** Серверы, которые показываются при текущем ядре приложения. */
-    fun visibleNodes(current: Engine): List<ServerNode> = nodesFor(effectiveEngine(current))
+    /**
+     * Серверы, которые показываются при текущем ядре приложения. Пока список
+     * для ядра не скачан (например, нет интернета), показываются серверы,
+     * сохранённые для другого ядра, — те из них, что это ядро умеет запускать.
+     */
+    fun visibleNodes(current: Engine): List<ServerNode> {
+        val engine = effectiveEngine(current)
+        val own = nodesFor(engine)
+        if (own.isNotEmpty()) return own
+        val other = if (engine == Engine.XRAY) nodesMihomo else nodesXray
+        return other.filter { it.supports(engine) }
+    }
+
+    /** Список для ядра ещё не скачивался — показываются серверы другого ядра. */
+    fun borrowsNodes(current: Engine): Boolean = nodesFor(effectiveEngine(current)).isEmpty() && visibleNodes(current).isNotEmpty()
 
     fun withNodes(engine: Engine, nodes: List<ServerNode>): Subscription = when (engine) {
         Engine.XRAY -> copy(nodesXray = nodes)
@@ -222,6 +235,7 @@ data class AppSettings(
     val tilePrompted: Boolean = false,
     /** Открывать окно добавления, если в буфере обмена ссылка клиента или сервера. */
     val clipboardImport: Boolean = true,
+    val auto: AutoOptions = AutoOptions(),
 ) {
     /** Настройки в формате libcore Options. */
     fun coreOptions(mtu: Int): String = JSONObject().apply {
@@ -254,6 +268,21 @@ data class AppSettings(
         Engine.MIHOMO -> userAgentMihomo
     }
 }
+
+/** Авто-режим: выбор лучшего сервера и контроль соединения. */
+data class AutoOptions(
+    /** При подключении выбирать лучший сервер по статистике и проверять его. */
+    val selectBest: Boolean = false,
+    /** Где искать: во всех подписках или только в подписке выбранного сервера. */
+    val allSubscriptions: Boolean = true,
+    /** Периодически проверять, что через VPN открываются сайты. */
+    val healthCheck: Boolean = true,
+    val intervalMinutes: Int = 5,
+    /** Сколько проверок подряд должно не пройти, чтобы сервер сочли нерабочим. */
+    val failures: Int = 3,
+    /** Нерабочий сервер менять на лучший из работающих. */
+    val failover: Boolean = true,
+)
 
 /**
  * Обход блокировок, как в Happ. Работает только в Xray: у mihomo аналогов нет.

@@ -37,6 +37,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.kvn.client.core.Engine
+import io.kvn.client.ui.components.ErrorBanner
 import io.kvn.client.ui.theme.Palette
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -47,6 +48,7 @@ fun AddSubscriptionSheet(
     initialEngine: Engine? = null,
     source: String? = null,
     busy: Boolean,
+    error: String? = null,
     onDismiss: () -> Unit,
     onSubmit: (input: String, name: String, engine: Engine?) -> Unit,
 ) {
@@ -126,6 +128,7 @@ fun AddSubscriptionSheet(
                 color = Palette.TextMuted,
                 fontSize = 12.sp,
             )
+            ErrorBanner(error)
             Spacer(Modifier.height(16.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedButton(

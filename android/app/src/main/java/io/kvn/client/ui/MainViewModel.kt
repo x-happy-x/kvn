@@ -22,6 +22,7 @@ import io.kvn.client.data.PingStats
 import io.kvn.client.data.ScanPreset
 import io.kvn.client.data.ScanResult
 import io.kvn.client.data.ServerNode
+import io.kvn.client.data.SubLabClient
 import io.kvn.client.data.Subscription
 import io.kvn.client.data.parseScanPresets
 import io.kvn.client.vpn.VpnController
@@ -65,7 +66,7 @@ data class ScanProgress(val running: Boolean = false, val done: Int = 0, val tot
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = (application as KvnApp).repository
-    private val pingStats = PingStats(application)
+    private val pingStats = (application as KvnApp).pingStats
     private val prefs = application.getSharedPreferences("scan", Context.MODE_PRIVATE)
 
     val subscriptions: StateFlow<List<Subscription>> = repository.subscriptions
@@ -90,6 +91,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _messages = MutableSharedFlow<String>(extraBufferCapacity = 4)
     val messages: SharedFlow<String> = _messages.asSharedFlow()
+
+    /**
+     * Ошибка для открытой модалки (вход, добавление подписки): показывается
+     * внутри неё — снэкбар прятался бы под окном.
+     */
+    private val _sheetError = MutableStateFlow<String?>(null)
+    val sheetError: StateFlow<String?> = _sheetError.asStateFlow()
+
+    fun clearSheetError() {
+        _sheetError.value = null
+    }
 
     private val _accountBusy = MutableStateFlow(false)
     val accountBusy: StateFlow<Boolean> = _accountBusy.asStateFlow()
@@ -123,6 +135,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var nodeTestJob: Job? = null
 
     init {
+        viewModelScope.launch {
+            VpnController.events.collect { _messages.emit(it) }
+        }
         viewModelScope.launch {
             vpnState.collect { state ->
                 when (state) {
@@ -174,6 +189,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val errors = repository.ensureNodes(engine)
             _refreshing.value = false
             errors.firstOrNull()?.let { _messages.tryEmit(it) }
+            if (subscriptions.value.any { it.borrowsNodes(engine) }) {
+                _messages.tryEmit("Для ${engine.title} подписки ещё не скачаны — пока показаны серверы прошлого ядра")
+            }
             // Тот же сервер под другим ядром ищем по имени.
             val nodes = repository.allNodes
             val same = nodes.firstOrNull { it.name == previousName }
@@ -232,6 +250,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun addSubscription(input: String, name: String?, engine: Engine?, onDone: () -> Unit) {
         viewModelScope.launch {
+            _sheetError.value = null
             _refreshing.value = true
             runCatching {
                 // Вставленную ссылку клиента сначала раскрываем до адреса подписки.
@@ -247,7 +266,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     onDone()
                     pingAll()
                 }
-                .onFailure { _messages.tryEmit(it.message ?: "Не удалось добавить подписку") }
+                .onFailure { _sheetError.value = it.message ?: "Не удалось добавить подписку" }
             _refreshing.value = false
         }
     }
@@ -339,6 +358,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (_accountBusy.value) return
         viewModelScope.launch {
             _accountBusy.value = true
+            _sheetError.value = null
             runCatching {
                 repository.subLabLogin(server, login, password)
                 repository.syncSubLab()
@@ -347,10 +367,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 report.errors.firstOrNull()?.let { _messages.tryEmit(it) }
                 onDone()
                 pingAll()
-            }.onFailure { _messages.tryEmit(it.message ?: "Не удалось войти") }
+            }.onFailure { _sheetError.value = it.message ?: "Не удалось войти" }
             _accountBusy.value = false
         }
     }
+
+    /** Адрес sub-lab, угаданный по уже добавленным коротким ссылкам `/l/…`. */
+    fun suggestedSubLabServer(): String =
+        settings.value.account.server.ifEmpty {
+            subscriptions.value.firstNotNullOfOrNull { SubLabClient.serverFromSubscriptionUrl(it.url) }.orEmpty()
+        }
 
     fun subLabSync() {
         if (_accountBusy.value) return

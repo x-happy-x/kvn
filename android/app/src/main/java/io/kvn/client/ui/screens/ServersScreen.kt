@@ -1,6 +1,10 @@
 package io.kvn.client.ui.screens
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -63,6 +67,7 @@ import io.kvn.client.ui.components.PingText
 import io.kvn.client.ui.components.expireLabel
 import io.kvn.client.ui.components.formatBytes
 import io.kvn.client.ui.components.plural
+import io.kvn.client.ui.components.pressable
 import io.kvn.client.ui.components.protocolLabel
 import io.kvn.client.ui.theme.Palette
 import java.text.DateFormat
@@ -90,30 +95,31 @@ fun ServersScreen(
     pingRecord: (ServerNode) -> PingRecord? = { null },
 ) {
     Column(Modifier.fillMaxSize()) {
+        Text(
+            "Серверы",
+            fontSize = 26.sp,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(start = 20.dp, top = 16.dp, bottom = 8.dp),
+        )
+        // Подписанные действия вместо одних значков: что делает кнопка, видно сразу.
         Row(
-            modifier = Modifier
+            Modifier
                 .fillMaxWidth()
-                .padding(start = 20.dp, end = 8.dp, top = 12.dp, bottom = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Text("Серверы", fontSize = 26.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-            ToolbarButton(Icons.Rounded.Bolt, "Самый быстрый", onFastest)
-            if (pinging) {
-                Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = Palette.Cyan)
-                }
-            } else {
-                ToolbarButton(Icons.Rounded.NetworkCheck, "Проверить пинг", onPingAll)
-            }
-            if (refreshing) {
-                Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = Palette.Violet)
-                }
-            } else {
-                ToolbarButton(Icons.Rounded.Refresh, "Обновить подписки", onRefreshAll)
-            }
-            ToolbarButton(Icons.Rounded.Add, "Добавить подписку", onAdd)
+            ActionButton(Icons.Rounded.NetworkCheck, if (pinging) "Пингую…" else "Пинг всех", busy = pinging, onClick = onPingAll)
+            ActionButton(Icons.Rounded.Bolt, "Выбрать лучший", onClick = onFastest)
+            ActionButton(Icons.Rounded.Refresh, if (refreshing) "Обновляю…" else "Обновить подписки", busy = refreshing, onClick = onRefreshAll)
+            ActionButton(Icons.Rounded.Add, "Добавить", accent = true, onClick = onAdd)
         }
+        Text(
+            "«Пинг всех» проверяет доступность серверов, «Выбрать лучший» — берёт самый надёжный и быстрый по истории проверок.",
+            color = Palette.TextMuted,
+            fontSize = 11.sp,
+            modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 6.dp, bottom = 4.dp),
+        )
 
         if (subscriptions.isEmpty()) {
             EmptyServers(onAdd)
@@ -126,12 +132,15 @@ fun ServersScreen(
         ) {
             subscriptions.forEach { subscription ->
                 item(key = "header-${subscription.id}") {
+                  Box(Modifier.animateItem()) {
                     SubscriptionHeader(subscription, engine, onRefresh, onRename, onDelete, onSetEngine)
+                  }
                 }
                 items(subscription.visibleNodes(engine), key = { it.id }) { node ->
                     // statsVersion — ключ перечитывания статистики после новой серии пингов.
                     val record = remember(node.id, statsVersion) { pingRecord(node) }
                     ServerRow(
+                        modifier = Modifier.animateItem(),
                         node = node,
                         selected = node.id == selectedId,
                         engine = subscription.effectiveEngine(engine),
@@ -147,9 +156,30 @@ fun ServersScreen(
 }
 
 @Composable
-private fun ToolbarButton(icon: ImageVector, description: String, onClick: () -> Unit) {
-    IconButton(onClick = onClick) {
-        Icon(icon, contentDescription = description, tint = Palette.TextSecondary)
+private fun ActionButton(
+    icon: ImageVector,
+    title: String,
+    busy: Boolean = false,
+    accent: Boolean = false,
+    onClick: () -> Unit,
+) {
+    val shape = RoundedCornerShape(14.dp)
+    Row(
+        Modifier
+            .clip(shape)
+            .background(if (accent) Palette.Violet else Palette.Surface)
+            .border(1.dp, if (accent) Palette.Violet else Palette.Stroke, shape)
+            .pressable(enabled = !busy, onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (busy) {
+            CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = Palette.Cyan)
+        } else {
+            Icon(icon, contentDescription = null, tint = if (accent) Palette.TextPrimary else Palette.VioletSoft, modifier = Modifier.size(18.dp))
+        }
+        Spacer(Modifier.width(8.dp))
+        Text(title, fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Palette.TextPrimary)
     }
 }
 
@@ -184,6 +214,7 @@ private fun SubscriptionHeader(
             val count = subscription.visibleNodes(engine).size.toLong()
             val details = buildList {
                 subscription.engine?.let { add("ядро ${it.title}") }
+                if (subscription.borrowsNodes(engine)) add("серверы прошлого ядра")
                 if (subscription.source == SubscriptionSource.SUBLAB) add("sub-lab")
                 add("$count ${plural(count, "сервер", "сервера", "серверов")}")
                 if (subscription.total > 0) add("${formatBytes(subscription.used)} / ${formatBytes(subscription.total)}")
@@ -310,6 +341,7 @@ private fun SubscriptionHeader(
 
 @Composable
 private fun ServerRow(
+    modifier: Modifier = Modifier,
     node: ServerNode,
     selected: Boolean,
     engine: Engine,
@@ -320,13 +352,15 @@ private fun ServerRow(
 ) {
     val supported = node.supports(engine)
     val shape = RoundedCornerShape(18.dp)
+    val borderColor by animateColorAsState(if (selected) Palette.Violet else Palette.Stroke, tween(300), label = "border")
+    val background by animateColorAsState(if (selected) Palette.SurfaceHigh else Palette.Surface, tween(300), label = "bg")
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .clip(shape)
-            .background(if (selected) Palette.SurfaceHigh else Palette.Surface)
-            .border(1.dp, if (selected) Palette.Violet else Palette.Stroke, shape)
-            .clickable(onClick = onClick)
+            .background(background)
+            .border(1.dp, borderColor, shape)
+            .pressable(onClick = onClick)
             .padding(horizontal = 14.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

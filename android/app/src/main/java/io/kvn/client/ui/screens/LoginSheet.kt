@@ -31,6 +31,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.kvn.client.ui.components.ErrorBanner
 import io.kvn.client.ui.theme.Palette
 
 /** Вход в sub-lab по логину и паролю. Пароль уходит только на сервер и не сохраняется. */
@@ -40,6 +41,7 @@ fun LoginSheet(
     initialServer: String,
     initialLogin: String,
     busy: Boolean,
+    error: String? = null,
     onDismiss: () -> Unit,
     onSubmit: (server: String, login: String, password: String) -> Unit,
 ) {
@@ -106,6 +108,7 @@ fun LoginSheet(
                 colors = colors,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
             )
+            ErrorBanner(error)
             Spacer(Modifier.height(16.dp))
             Button(
                 onClick = { onSubmit(server, login, password) },

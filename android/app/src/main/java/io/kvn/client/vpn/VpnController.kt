@@ -4,7 +4,10 @@ import android.content.Context
 import android.content.Intent
 import androidx.core.content.ContextCompat
 import io.kvn.client.core.Engine
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
@@ -26,6 +29,15 @@ object VpnController {
 
     internal fun update(state: VpnState) {
         _state.value = state
+    }
+
+    private val _events = MutableSharedFlow<String>(extraBufferCapacity = 8)
+
+    /** Сообщения сервиса для экрана: авто-переключение сервера и т.п. */
+    val events: SharedFlow<String> = _events.asSharedFlow()
+
+    internal fun notify(message: String) {
+        _events.tryEmit(message)
     }
 
     /** Включён ли VPN с точки зрения пользователя — в том числе на паузе. */

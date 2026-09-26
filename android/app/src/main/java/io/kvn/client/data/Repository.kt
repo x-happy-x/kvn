@@ -106,6 +106,8 @@ class Repository(private val context: Context) {
      * переключения ядра, ведь каждое получает подписку со своими заголовками.
      */
     suspend fun ensureNodes(engine: Engine): List<String> {
+        // Без сети не дёргаем панели: до загрузки видны серверы прошлого ядра.
+        if (!isOnline()) return emptyList()
         val errors = mutableListOf<String>()
         _subscriptions.value.filter { it.remote && it.engine == null && it.nodesFor(engine).isEmpty() }.forEach { subscription ->
             refresh(subscription.id, engine).onFailure { errors += "${subscription.name}: ${it.message}" }
@@ -233,6 +235,16 @@ class Repository(private val context: Context) {
         persist()
     }
 
+    /** Есть ли подключение к интернету (любая сеть, кроме нашего же VPN). */
+    fun isOnline(): Boolean {
+        val connectivity = context.getSystemService(android.net.ConnectivityManager::class.java) ?: return true
+        return connectivity.allNetworks.any { network ->
+            val caps = connectivity.getNetworkCapabilities(network) ?: return@any false
+            caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                !caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN)
+        }
+    }
+
     private fun hostOf(url: String): String =
         runCatching { java.net.URI(url).host }.getOrNull()?.ifEmpty { null } ?: "Подписка"
 
@@ -287,6 +299,14 @@ class Repository(private val context: Context) {
             ),
             tilePrompted = prefs.getBoolean("tilePrompted", false),
             clipboardImport = prefs.getBoolean("clipboardImport", true),
+            auto = AutoOptions(
+                selectBest = prefs.getBoolean("autoSelectBest", false),
+                allSubscriptions = prefs.getBoolean("autoAllSubscriptions", true),
+                healthCheck = prefs.getBoolean("autoHealthCheck", true),
+                intervalMinutes = prefs.getInt("autoIntervalMinutes", 5),
+                failures = prefs.getInt("autoFailures", 3),
+                failover = prefs.getBoolean("autoFailover", true),
+            ),
         )
     }
 
@@ -322,6 +342,12 @@ class Repository(private val context: Context) {
             .putInt("muxConcurrency", settings.bypass.muxConcurrency)
             .putBoolean("tilePrompted", settings.tilePrompted)
             .putBoolean("clipboardImport", settings.clipboardImport)
+            .putBoolean("autoSelectBest", settings.auto.selectBest)
+            .putBoolean("autoAllSubscriptions", settings.auto.allSubscriptions)
+            .putBoolean("autoHealthCheck", settings.auto.healthCheck)
+            .putInt("autoIntervalMinutes", settings.auto.intervalMinutes)
+            .putInt("autoFailures", settings.auto.failures)
+            .putBoolean("autoFailover", settings.auto.failover)
             .apply()
     }
 }

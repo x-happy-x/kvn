@@ -1,8 +1,6 @@
 package io.kvn.client.data
 
 import android.util.Base64
-import java.net.HttpURLConnection
-import java.net.URL
 import java.net.URLDecoder
 
 /** Ответ сервера подписки вместе с метаданными из заголовков. */
@@ -18,43 +16,20 @@ data class FetchedSubscription(
 
 object SubscriptionFetcher {
     fun fetch(url: String, headers: Map<String, String>): FetchedSubscription {
-        var target = URL(url)
-        // HttpURLConnection не переходит между http и https сам — делаем это вручную.
-        repeat(5) {
-            val connection = (target.openConnection() as HttpURLConnection).apply {
-                connectTimeout = 15_000
-                readTimeout = 20_000
-                instanceFollowRedirects = false
-                headers.forEach { (name, value) -> setRequestProperty(name, value) }
-            }
-            try {
-                val code = connection.responseCode
-                if (code in 300..399) {
-                    val location = connection.getHeaderField("Location")
-                        ?: throw IllegalStateException("Редирект без адреса")
-                    target = URL(target, location)
-                    return@repeat
-                }
-                if (code !in 200..299) {
-                    throw IllegalStateException("Сервер подписки ответил $code")
-                }
-                val body = connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
-                val info = parseUserInfo(connection.getHeaderField("subscription-userinfo"))
-                return FetchedSubscription(
-                    body = body,
-                    title = decodeHeader(connection.getHeaderField("profile-title"))
-                        ?: fileName(connection.getHeaderField("content-disposition")),
-                    upload = info["upload"] ?: 0,
-                    download = info["download"] ?: 0,
-                    total = info["total"] ?: 0,
-                    expire = info["expire"] ?: 0,
-                    announce = decodeHeader(connection.getHeaderField("announce")),
-                )
-            } finally {
-                connection.disconnect()
-            }
+        val response = Http.request("GET", url, headers)
+        if (response.status !in 200..299) {
+            throw IllegalStateException("Сервер подписки ответил ${response.status}")
         }
-        throw IllegalStateException("Слишком много редиректов")
+        val info = parseUserInfo(response.header("subscription-userinfo"))
+        return FetchedSubscription(
+            body = response.body,
+            title = decodeHeader(response.header("profile-title")) ?: fileName(response.header("content-disposition")),
+            upload = info["upload"] ?: 0,
+            download = info["download"] ?: 0,
+            total = info["total"] ?: 0,
+            expire = info["expire"] ?: 0,
+            announce = decodeHeader(response.header("announce")),
+        )
     }
 
     /** `upload=1; download=2; total=3; expire=4` → карта чисел. */

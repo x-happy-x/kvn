@@ -1,5 +1,6 @@
 package io.kvn.client.ui.components
 
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
@@ -47,7 +48,8 @@ fun Panel(
             .clip(shape)
             .background(Palette.Surface)
             .border(1.dp, Palette.Stroke, shape)
-            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .then(if (onClick != null) Modifier.pressable(onClick = onClick) else Modifier)
+            .animateContentSize(uiSpring())
             .padding(16.dp),
         content = content,
     )
