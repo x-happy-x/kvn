@@ -83,26 +83,33 @@ jobs:
       - name: libcore.aar
         run: ANDROID_NDK_HOME="$ANDROID_HOME/ndk/$NDK_VERSION" ./build-core.sh
 
-      # Без секретов APK подписывается debug-ключом раннера: он новый на каждой
-      # сборке, поэтому поверх такой версии следующая не встанет.
+      # Подпись — ключ из секретов LMS_* (тот же, что у lms-android); старые
+      # имена KEYSTORE_* оставлены запасными. Без секретов APK подписывается
+      # debug-ключом раннера, и новая сборка не встанет поверх старой.
       - name: Signing key
         env:
-          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
-          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          KEYSTORE_BASE64: ${{ secrets.LMS_KEYSTORE_BASE64 || secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.LMS_KEYSTORE_PASSWORD || secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.LMS_KEY_ALIAS || secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.LMS_KEY_PASSWORD || secrets.KEY_PASSWORD }}
         run: |
           if [ -z "$KEYSTORE_BASE64" ]; then
-            echo "::warning::Секрет KEYSTORE_BASE64 не задан — APK подписан debug-ключом"
+            echo "::warning::Секрет LMS_KEYSTORE_BASE64 не задан — APK подписан debug-ключом"
             exit 0
           fi
           echo "$KEYSTORE_BASE64" | base64 -d > android/release.jks
+          # Проверяем пароль и алиас сразу, а не в конце долгой сборки.
+          if ! keytool -list -keystore android/release.jks -storepass "$KEYSTORE_PASSWORD" -alias "$KEY_ALIAS" > /dev/null; then
+            echo "::error::Ключ не открывается: проверьте LMS_KEYSTORE_PASSWORD и LMS_KEY_ALIAS"
+            exit 1
+          fi
           cat > android/keystore.properties <<EOF
           storeFile=release.jks
           storePassword=$KEYSTORE_PASSWORD
           keyAlias=$KEY_ALIAS
           keyPassword=${KEY_PASSWORD:-$KEYSTORE_PASSWORD}
           EOF
+          echo "APK подписывается ключом «$KEY_ALIAS»"
 
       - name: APK
         working-directory: android
