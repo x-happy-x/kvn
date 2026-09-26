@@ -129,12 +129,15 @@ class KvnVpnService : VpnService() {
 
     private fun connect(reuseTun: Boolean) {
         val repository = KvnApp.instance.repository
-        val settings = repository.settings.value
         val node = repository.selectedNode()
         if (node == null) {
             fail("Добавьте подписку и выберите сервер")
             return
         }
+        // У подписки может быть закреплено своё ядро — тогда переключаемся на него.
+        val nodeEngine = repository.engineFor(node)
+        if (nodeEngine != repository.settings.value.engine) repository.setEngine(nodeEngine)
+        val settings = repository.settings.value
         if (!node.supports(settings.engine)) {
             fail("«${node.title}» (${node.type}) не работает на ядре ${settings.engine.title}")
             return

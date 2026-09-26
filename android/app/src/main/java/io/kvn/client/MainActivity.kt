@@ -1,6 +1,9 @@
 package io.kvn.client
 
 import android.Manifest
+import android.app.StatusBarManager
+import android.content.ComponentName
+import android.graphics.drawable.Icon
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -60,6 +63,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import io.kvn.client.core.Engine
+import io.kvn.client.data.ImportRequest
 import io.kvn.client.ui.MainViewModel
 import io.kvn.client.ui.screens.AddSubscriptionSheet
 import io.kvn.client.ui.screens.AppsScreen
@@ -72,6 +77,7 @@ import io.kvn.client.ui.screens.WifiScreen
 import io.kvn.client.ui.theme.KvnTheme
 import io.kvn.client.ui.theme.Palette
 import io.kvn.client.vpn.VpnState
+import io.kvn.client.vpn.VpnTileService
 import kotlinx.coroutines.flow.MutableStateFlow
 
 /** Разрешения, от которых зависит интерфейс; пересчитываются при возврате в приложение. */
@@ -80,8 +86,11 @@ data class Permissions(val location: Boolean = false, val backgroundLocation: Bo
 class MainActivity : ComponentActivity() {
     private val viewModel: MainViewModel by viewModels()
 
-    /** Ссылка из kvn://import?url=… — открывает окно добавления с подставленным адресом. */
-    private val pendingImport = MutableStateFlow<String?>(null)
+    /**
+     * Ссылка другого клиента (happ://, clash://, sing-box://…, kvn://import) —
+     * открывает окно добавления с подставленным адресом и ядром.
+     */
+    private val pendingImport = MutableStateFlow<ImportRequest?>(null)
 
     private val permissions = MutableStateFlow(Permissions())
 
@@ -119,6 +128,7 @@ class MainActivity : ComponentActivity() {
                     onToggle = ::toggleVpn,
                     onRequestLocation = ::requestLocation,
                     onRequestBackgroundLocation = ::requestBackgroundLocation,
+                    onAddTile = ::requestAddTile,
                 )
             }
         }
@@ -140,9 +150,32 @@ class MainActivity : ComponentActivity() {
             intent.removeExtra(EXTRA_CONNECT)
             toggleVpn()
         }
-        val data: Uri = intent.data ?: return
-        if (data.scheme == "kvn" && data.host == "import") {
-            pendingImport.value = data.getQueryParameter("url")
+        val link = intent.dataString
+            ?: intent.getStringExtra(Intent.EXTRA_TEXT)?.takeIf { intent.action == Intent.ACTION_SEND }
+            ?: return
+        viewModel.parseImport(link)?.let { pendingImport.value = it }
+    }
+
+    /**
+     * Плитку в шторку Android 13+ добавляет по запросу приложения; на старых
+     * версиях её перетаскивают вручную в редакторе быстрых настроек.
+     */
+    private fun requestAddTile() {
+        viewModel.markTilePrompted()
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            viewModel.showMessage("Откройте шторку, нажмите карандаш и перетащите плитку KVN")
+            return
+        }
+        val manager = getSystemService(StatusBarManager::class.java) ?: return
+        manager.requestAddTileService(
+            ComponentName(this, VpnTileService::class.java),
+            getString(R.string.app_name),
+            Icon.createWithResource(this, R.drawable.ic_stat_vpn),
+            mainExecutor,
+        ) { result ->
+            if (result == StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_ALREADY_ADDED) {
+                viewModel.showMessage("Плитка KVN уже в шторке")
+            }
         }
     }
 
@@ -206,11 +239,12 @@ private enum class Overlay { NONE, APPS, WIFI }
 private fun App(
     viewModel: MainViewModel,
     permissions: Permissions,
-    pendingImport: String?,
+    pendingImport: ImportRequest?,
     onImportConsumed: () -> Unit,
     onToggle: () -> Unit,
     onRequestLocation: () -> Unit,
     onRequestBackgroundLocation: () -> Unit,
+    onAddTile: () -> Unit,
 ) {
     val subscriptions by viewModel.subscriptions.collectAsStateWithLifecycle()
     val settings by viewModel.settings.collectAsStateWithLifecycle()
@@ -225,11 +259,17 @@ private fun App(
     val scanTargets by viewModel.scanTargets.collectAsStateWithLifecycle()
     val scanResults by viewModel.scanResults.collectAsStateWithLifecycle()
     val scanProgress by viewModel.scanProgress.collectAsStateWithLifecycle()
+    val nodeTests by viewModel.nodeTests.collectAsStateWithLifecycle()
+    val nodeTestProgress by viewModel.nodeTestProgress.collectAsStateWithLifecycle()
+    val statsVersion by viewModel.statsVersion.collectAsStateWithLifecycle()
 
     var tab by rememberSaveable { mutableStateOf(Tab.HOME) }
     var overlay by rememberSaveable { mutableStateOf(Overlay.NONE) }
     var adding by rememberSaveable { mutableStateOf(false) }
     var addUrl by rememberSaveable { mutableStateOf("") }
+    var addName by rememberSaveable { mutableStateOf("") }
+    var addEngine by rememberSaveable { mutableStateOf("") }
+    var addSource by rememberSaveable { mutableStateOf("") }
     var loggingIn by rememberSaveable { mutableStateOf(false) }
     val snackbar = remember { SnackbarHostState() }
 
@@ -238,9 +278,18 @@ private fun App(
     }
     LaunchedEffect(pendingImport) {
         if (pendingImport != null) {
-            addUrl = pendingImport
+            addUrl = pendingImport.input
+            addName = pendingImport.name.orEmpty()
+            addEngine = pendingImport.engine?.id.orEmpty()
+            addSource = pendingImport.client
             adding = true
             onImportConsumed()
+        }
+    }
+    // Плитку в шторку предлагаем один раз — после первого удачного подключения.
+    LaunchedEffect(state is VpnState.Connected) {
+        if (state is VpnState.Connected && !settings.tilePrompted && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            onAddTile()
         }
     }
     // Пинги при первом открытии, чтобы в списке сразу было видно живые серверы.
@@ -322,7 +371,11 @@ private fun App(
                             onRefresh = viewModel::refresh,
                             onRename = viewModel::rename,
                             onDelete = viewModel::delete,
+                            onSetEngine = viewModel::setSubscriptionEngine,
                             onAdd = { adding = true },
+                            nodeTests = nodeTests,
+                            statsVersion = statsVersion,
+                            pingRecord = viewModel::pingRecord,
                         )
                         Tab.SCAN -> ScanScreen(
                             presets = viewModel.scanPresets,
@@ -336,6 +389,11 @@ private fun App(
                             onRun = { viewModel.runScan() },
                             onRunOne = { viewModel.runScan(listOf(it)) },
                             onStop = viewModel::stopScan,
+                            nodes = remember(subscriptions, settings.engine) { subscriptions.flatMap { it.visibleNodes(settings.engine) } },
+                            nodeTests = nodeTests,
+                            nodeTestProgress = nodeTestProgress,
+                            onTestNodes = viewModel::testAllNodes,
+                            onStopNodeTests = viewModel::stopNodeTests,
                         )
                         Tab.SETTINGS -> SettingsScreen(
                             settings = settings,
@@ -348,6 +406,7 @@ private fun App(
                             onLogout = viewModel::subLabLogout,
                             onOpenApps = { overlay = Overlay.APPS },
                             onOpenWifi = { overlay = Overlay.WIFI },
+                            onAddTile = onAddTile,
                             loadLogs = viewModel::logs,
                             loadConfig = viewModel::configPreview,
                         )
@@ -358,17 +417,23 @@ private fun App(
     }
 
     if (adding) {
+        val reset = {
+            adding = false
+            addUrl = ""
+            addName = ""
+            addEngine = ""
+            addSource = ""
+        }
         AddSubscriptionSheet(
             initialUrl = addUrl,
+            initialName = addName,
+            initialEngine = addEngine.ifEmpty { null }?.let { Engine.of(it) },
+            source = addSource.ifEmpty { null },
             busy = refreshing,
-            onDismiss = {
-                adding = false
-                addUrl = ""
-            },
-            onSubmit = { input, name ->
-                viewModel.addSubscription(input, name) {
-                    adding = false
-                    addUrl = ""
+            onDismiss = reset,
+            onSubmit = { input, name, engine ->
+                viewModel.addSubscription(input, name, engine) {
+                    reset()
                     tab = Tab.SERVERS
                 }
             },

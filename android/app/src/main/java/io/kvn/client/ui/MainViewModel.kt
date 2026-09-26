@@ -14,6 +14,11 @@ import io.kvn.client.core.CoreBridge
 import io.kvn.client.core.Engine
 import io.kvn.client.data.AppMode
 import io.kvn.client.data.AppSettings
+import io.kvn.client.data.DeepLinks
+import io.kvn.client.data.ImportRequest
+import io.kvn.client.data.NodeTest
+import io.kvn.client.data.PingRecord
+import io.kvn.client.data.PingStats
 import io.kvn.client.data.ScanPreset
 import io.kvn.client.data.ScanResult
 import io.kvn.client.data.ServerNode
@@ -60,6 +65,7 @@ data class ScanProgress(val running: Boolean = false, val done: Int = 0, val tot
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = (application as KvnApp).repository
+    private val pingStats = PingStats(application)
     private val prefs = application.getSharedPreferences("scan", Context.MODE_PRIVATE)
 
     val subscriptions: StateFlow<List<Subscription>> = repository.subscriptions
@@ -102,8 +108,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _scanProgress = MutableStateFlow(ScanProgress())
     val scanProgress: StateFlow<ScanProgress> = _scanProgress.asStateFlow()
 
+    private val _nodeTests = MutableStateFlow<Map<String, NodeTest>>(emptyMap())
+    val nodeTests: StateFlow<Map<String, NodeTest>> = _nodeTests.asStateFlow()
+
+    private val _nodeTestProgress = MutableStateFlow(ScanProgress())
+    val nodeTestProgress: StateFlow<ScanProgress> = _nodeTestProgress.asStateFlow()
+
+    /** Версия статистики пингов: меняется после каждой серии, чтобы экран перечитал её. */
+    private val _statsVersion = MutableStateFlow(0)
+    val statsVersion: StateFlow<Int> = _statsVersion.asStateFlow()
+
     private var trafficJob: Job? = null
     private var scanJob: Job? = null
+    private var nodeTestJob: Job? = null
 
     init {
         viewModelScope.launch {
@@ -174,7 +191,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun select(node: ServerNode) {
         repository.selectNode(node)
-        if (!node.supports(settings.value.engine)) {
+        // Сервер подписки с закреплённым ядром переключает приложение на это ядро.
+        val nodeEngine = repository.engineFor(node)
+        if (nodeEngine != settings.value.engine) {
+            repository.setEngine(nodeEngine)
+            _messages.tryEmit("Ядро переключено на ${nodeEngine.title}")
+            viewModelScope.launch { repository.ensureNodes(nodeEngine) }
+        }
+        if (!node.supports(nodeEngine)) {
             _messages.tryEmit("Этот сервер работает только на ${if (node.mihomo) "Mihomo" else "Xray"}")
             return
         }
@@ -195,12 +219,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     // ---------- подписки ----------
 
-    fun addSubscription(input: String, name: String?, onDone: () -> Unit) {
+    /**
+     * Разбирает ссылку чужого клиента (happ://, clash://, sing-box://…) в то,
+     * что можно добавить. null — это не ссылка клиента, её добавляют как есть.
+     */
+    fun parseImport(raw: String): ImportRequest? = runCatching {
+        DeepLinks.parse(raw) { CoreBridge.decryptHapp(it) }
+    }.getOrElse {
+        _messages.tryEmit(it.message ?: "Не удалось разобрать ссылку")
+        null
+    }
+
+    fun addSubscription(input: String, name: String?, engine: Engine?, onDone: () -> Unit) {
         viewModelScope.launch {
             _refreshing.value = true
-            runCatching { repository.addSubscription(input, name) }
+            runCatching {
+                // Вставленную ссылку клиента сначала раскрываем до адреса подписки.
+                val request = withContext(Dispatchers.IO) { DeepLinks.parse(input) { CoreBridge.decryptHapp(it) } }
+                repository.addSubscription(
+                    request?.input ?: input,
+                    name?.ifBlank { null } ?: request?.name,
+                    engine ?: request?.engine,
+                )
+            }
                 .onSuccess {
-                    _messages.tryEmit("Добавлено серверов: ${it.nodesFor(settings.value.engine).size}")
+                    _messages.tryEmit("Добавлено серверов: ${it.visibleNodes(settings.value.engine).size}")
                     onDone()
                     pingAll()
                 }
@@ -236,6 +279,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun rename(subscription: Subscription, name: String) = repository.rename(subscription.id, name)
 
+    fun setSubscriptionEngine(subscription: Subscription, engine: Engine?) {
+        viewModelScope.launch {
+            _refreshing.value = true
+            repository.setSubscriptionEngine(subscription.id, engine)
+                .onSuccess { _messages.tryEmit("${it.name}: ${engine?.title ?: "текущее ядро"}") }
+                .onFailure { _messages.tryEmit(it.message ?: "Не удалось обновить подписку") }
+            _refreshing.value = false
+        }
+    }
+
+    /** Статистика пингов сервера (null — ещё не проверялся). */
+    fun pingRecord(node: ServerNode): PingRecord? = pingStats.get(node)
+
     fun delete(subscription: Subscription) = repository.delete(subscription.id)
 
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -247,24 +303,29 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _pinging.value = true
             _pings.value = emptyMap()
             val limited = Dispatchers.IO.limitedParallelism(8)
-            nodes.map { node ->
+            // Сначала те, что чаще работают и отвечают быстрее: их результат виден сразу.
+            pingStats.order(nodes).map { node ->
                 launch(limited) {
-                    val ms = CoreBridge.tcpPing(node.server, node.port)
+                    val ms = if (node.server.isEmpty() || node.port <= 0) -1 else CoreBridge.tcpPing(node.server, node.port)
+                    if (node.server.isNotEmpty()) pingStats.record(node, ms > 0, ms)
                     _pings.update { it + (node.id to ms) }
                 }
             }.forEach { it.join() }
+            pingStats.save()
+            _statsVersion.update { it + 1 }
             _pinging.value = false
         }
     }
 
-    /** Выбирает сервер с наименьшим пингом среди поддерживаемых текущим ядром. */
+    /**
+     * Выбирает лучший из отвечающих сейчас серверов: по статистике (как часто
+     * работает и насколько быстро), а не по одному последнему пингу.
+     */
     fun selectFastest() {
-        val engine = settings.value.engine
         val best = repository.allNodes
-            .filter { it.supports(engine) }
-            .mapNotNull { node -> _pings.value[node.id]?.takeIf { it > 0 }?.let { node to it } }
-            .minByOrNull { it.second }
-            ?.first
+            .filter { it.supports(repository.engineFor(it)) }
+            .filter { node -> (_pings.value[node.id] ?: 0) > 0 || _nodeTests.value[node.id]?.ok == true }
+            .maxByOrNull { pingStats.get(it)?.score ?: 0.0 }
         if (best == null) {
             _messages.tryEmit("Сначала проверьте пинг")
             return
@@ -415,6 +476,56 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun saveScanTargets() {
         prefs.edit().putString("targets", _scanTargets.value.joinToString("\n")).apply()
+    }
+
+    // ---------- проверка серверов ----------
+
+    /**
+     * Настоящая проверка всех серверов: каждый открывает страницу через свой
+     * прокси. Так видно те, что пингуются, но ничего не открывают.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun testAllNodes() {
+        val nodes = repository.allNodes
+        if (nodes.isEmpty() || nodeTestJob?.isActive == true) return
+        nodeTestJob = viewModelScope.launch {
+            _nodeTests.value = emptyMap()
+            _nodeTestProgress.value = ScanProgress(running = true, total = nodes.size)
+            val options = settings.value.coreOptions(1500)
+            val limited = Dispatchers.IO.limitedParallelism(4)
+            pingStats.order(nodes).map { node ->
+                launch(limited) {
+                    _nodeTestProgress.update { it.copy(current = node.title) }
+                    val engine = repository.engineFor(node)
+                    val result = if (!node.supports(engine)) {
+                        NodeTest.failed("не работает на ${engine.title}")
+                    } else {
+                        runCatching { NodeTest.fromJson(JSONObject(CoreBridge.testNode(engine, node.json, options))) }
+                            .getOrElse { NodeTest.failed(it.message ?: "ошибка проверки") }
+                    }
+                    if (result.verdict != "error") pingStats.record(node, result.ok, result.ms)
+                    _nodeTests.update { it + (node.id to result) }
+                    _nodeTestProgress.update { it.copy(done = it.done + 1) }
+                }
+            }.forEach { it.join() }
+            pingStats.save()
+            _statsVersion.update { it + 1 }
+            _nodeTestProgress.value = ScanProgress()
+            val silent = _nodeTests.value.values.count { it.verdict == "silent" }
+            val ok = _nodeTests.value.values.count { it.ok }
+            _messages.tryEmit("Работают: $ok из ${nodes.size}" + if (silent > 0) ", пингуются без ответа: $silent" else "")
+        }
+    }
+
+    fun stopNodeTests() {
+        nodeTestJob?.cancel()
+        _nodeTestProgress.value = ScanProgress()
+    }
+
+    fun markTilePrompted() = updateSettings(restart = false) { it.copy(tilePrompted = true) }
+
+    fun showMessage(message: String) {
+        _messages.tryEmit(message)
     }
 
     // ---------- диагностика ----------

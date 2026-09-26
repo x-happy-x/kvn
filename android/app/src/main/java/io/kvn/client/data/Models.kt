@@ -86,6 +86,11 @@ data class Subscription(
     /** Объявление панели (заголовок `announce`). */
     val announce: String = "",
     /**
+     * Ядро, закреплённое за подпиской: при подключении к её серверу приложение
+     * переключается на него. null — подписка работает на текущем ядре.
+     */
+    val engine: Engine? = null,
+    /**
      * Серверы для каждого ядра. Xray получает подписку как Happ, Mihomo — как
      * FlClashX, поэтому панель может отдать им разные списки.
      */
@@ -101,6 +106,12 @@ data class Subscription(
         Engine.XRAY -> nodesXray
         Engine.MIHOMO -> nodesMihomo
     }
+
+    /** Ядро, на котором работают серверы подписки при текущем ядре приложения. */
+    fun effectiveEngine(current: Engine): Engine = engine ?: current
+
+    /** Серверы, которые показываются при текущем ядре приложения. */
+    fun visibleNodes(current: Engine): List<ServerNode> = nodesFor(effectiveEngine(current))
 
     fun withNodes(engine: Engine, nodes: List<ServerNode>): Subscription = when (engine) {
         Engine.XRAY -> copy(nodesXray = nodes)
@@ -119,6 +130,7 @@ data class Subscription(
         put("total", total)
         put("expire", expire)
         put("announce", announce)
+        engine?.let { put("engine", it.id) }
         error?.let { put("error", it) }
         put("nodesXray", JSONArray().apply { nodesXray.forEach { put(JSONObject(it.json)) } })
         put("nodesMihomo", JSONArray().apply { nodesMihomo.forEach { put(JSONObject(it.json)) } })
@@ -147,6 +159,7 @@ data class Subscription(
                 total = json.optLong("total"),
                 expire = json.optLong("expire"),
                 announce = json.optString("announce"),
+                engine = json.optString("engine").ifEmpty { null }?.let { Engine.of(it) },
                 nodesXray = json.optJSONArray("nodesXray")?.let { ServerNode.listFromJson(id, it) } ?: legacy,
                 nodesMihomo = json.optJSONArray("nodesMihomo")?.let { ServerNode.listFromJson(id, it) } ?: legacy,
                 error = json.optString("error").ifEmpty { null },
@@ -204,6 +217,9 @@ data class AppSettings(
     val wifiMode: WifiMode = WifiMode.OFF,
     val wifiNetworks: Set<String> = emptySet(),
     val account: SubLabAccount = SubLabAccount(),
+    val bypass: BypassOptions = BypassOptions(),
+    /** Предложение добавить плитку в шторку уже показывали. */
+    val tilePrompted: Boolean = false,
 ) {
     /** Настройки в формате libcore Options. */
     fun coreOptions(mtu: Int): String = JSONObject().apply {
@@ -213,6 +229,22 @@ data class AppSettings(
         put("directRu", directRu)
         put("ipv6", ipv6)
         put("logLevel", logLevel)
+        put("fragment", JSONObject().apply {
+            put("enabled", bypass.fragment)
+            put("packets", bypass.fragmentPackets)
+            put("length", bypass.fragmentLength)
+            put("interval", bypass.fragmentInterval)
+        })
+        put("noise", JSONObject().apply {
+            put("enabled", bypass.noise)
+            put("type", bypass.noiseType)
+            put("packet", bypass.noisePacket)
+            put("delay", bypass.noiseDelay)
+        })
+        put("mux", JSONObject().apply {
+            put("enabled", bypass.mux)
+            put("concurrency", bypass.muxConcurrency)
+        })
     }.toString()
 
     fun customUserAgent(engine: Engine): String = when (engine) {
@@ -220,6 +252,25 @@ data class AppSettings(
         Engine.MIHOMO -> userAgentMihomo
     }
 }
+
+/**
+ * Обход блокировок, как в Happ. Работает только в Xray: у mihomo аналогов нет.
+ */
+data class BypassOptions(
+    /** Фрагментация TLS ClientHello: ТСПУ не собирает SNI из кусков. */
+    val fragment: Boolean = false,
+    val fragmentPackets: String = "tlshello",
+    val fragmentLength: String = "100-200",
+    val fragmentInterval: String = "10-20",
+    /** «Шум» перед UDP (QUIC): мешает распознать протокол по первым пакетам. */
+    val noise: Boolean = false,
+    val noiseType: String = "rand",
+    val noisePacket: String = "10-20",
+    val noiseDelay: String = "10-16",
+    /** Мультиплексирование соединений (не для XTLS Vision). */
+    val mux: Boolean = false,
+    val muxConcurrency: Int = 8,
+)
 
 /** Региональные индикаторы (флаги) — пары символов из диапазона U+1F1E6..U+1F1FF. */
 fun leadingFlag(text: String): String? {

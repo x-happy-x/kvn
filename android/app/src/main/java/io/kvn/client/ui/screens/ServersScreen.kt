@@ -24,6 +24,7 @@ import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.Memory
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.NetworkCheck
 import androidx.compose.material.icons.rounded.Refresh
@@ -51,6 +52,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.kvn.client.core.Engine
 import io.kvn.client.data.ServerNode
+import io.kvn.client.data.NodeTest
+import io.kvn.client.data.PingRecord
 import io.kvn.client.data.Subscription
 import io.kvn.client.data.SubscriptionSource
 import io.kvn.client.ui.Pings
@@ -80,7 +83,11 @@ fun ServersScreen(
     onRefresh: (Subscription) -> Unit,
     onRename: (Subscription, String) -> Unit,
     onDelete: (Subscription) -> Unit,
+    onSetEngine: (Subscription, Engine?) -> Unit,
     onAdd: () -> Unit,
+    nodeTests: Map<String, NodeTest> = emptyMap(),
+    statsVersion: Int = 0,
+    pingRecord: (ServerNode) -> PingRecord? = { null },
 ) {
     Column(Modifier.fillMaxSize()) {
         Row(
@@ -119,14 +126,18 @@ fun ServersScreen(
         ) {
             subscriptions.forEach { subscription ->
                 item(key = "header-${subscription.id}") {
-                    SubscriptionHeader(subscription, engine, onRefresh, onRename, onDelete)
+                    SubscriptionHeader(subscription, engine, onRefresh, onRename, onDelete, onSetEngine)
                 }
-                items(subscription.nodesFor(engine), key = { it.id }) { node ->
+                items(subscription.visibleNodes(engine), key = { it.id }) { node ->
+                    // statsVersion — ключ перечитывания статистики после новой серии пингов.
+                    val record = remember(node.id, statsVersion) { pingRecord(node) }
                     ServerRow(
                         node = node,
                         selected = node.id == selectedId,
-                        engine = engine,
+                        engine = subscription.effectiveEngine(engine),
                         ping = pings[node.id],
+                        record = record,
+                        test = nodeTests[node.id],
                         onClick = { onSelect(node) },
                     )
                 }
@@ -149,8 +160,10 @@ private fun SubscriptionHeader(
     onRefresh: (Subscription) -> Unit,
     onRename: (Subscription, String) -> Unit,
     onDelete: (Subscription) -> Unit,
+    onSetEngine: (Subscription, Engine?) -> Unit,
 ) {
     var menu by remember { mutableStateOf(false) }
+    var choosingEngine by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
 
@@ -168,8 +181,9 @@ private fun SubscriptionHeader(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            val count = subscription.nodesFor(engine).size.toLong()
+            val count = subscription.visibleNodes(engine).size.toLong()
             val details = buildList {
+                subscription.engine?.let { add("ядро ${it.title}") }
                 if (subscription.source == SubscriptionSource.SUBLAB) add("sub-lab")
                 add("$count ${plural(count, "сервер", "сервера", "серверов")}")
                 if (subscription.total > 0) add("${formatBytes(subscription.used)} / ${formatBytes(subscription.total)}")
@@ -199,6 +213,14 @@ private fun SubscriptionHeader(
                     )
                 }
                 DropdownMenuItem(
+                    text = { Text("Ядро: ${subscription.engine?.title ?: "текущее"}") },
+                    leadingIcon = { Icon(Icons.Rounded.Memory, null) },
+                    onClick = {
+                        menu = false
+                        choosingEngine = true
+                    },
+                )
+                DropdownMenuItem(
                     text = { Text("Переименовать") },
                     leadingIcon = { Icon(Icons.Rounded.Edit, null) },
                     onClick = {
@@ -220,6 +242,36 @@ private fun SubscriptionHeader(
                 }
             }
         }
+    }
+
+    if (choosingEngine) {
+        AlertDialog(
+            onDismissRequest = { choosingEngine = false },
+            containerColor = Palette.SurfaceHigh,
+            title = { Text("Ядро подписки") },
+            text = {
+                Column {
+                    Text(
+                        "С закреплённым ядром приложение само переключится на него при подключении к серверу этой подписки.",
+                        color = Palette.TextSecondary,
+                        fontSize = 13.sp,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    listOf<Engine?>(null, Engine.XRAY, Engine.MIHOMO).forEach { option ->
+                        TextButton(onClick = {
+                            choosingEngine = false
+                            onSetEngine(subscription, option)
+                        }) {
+                            Text(
+                                option?.title ?: "Текущее ядро приложения",
+                                color = if (subscription.engine == option) Palette.VioletSoft else Palette.TextPrimary,
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { choosingEngine = false }) { Text("Закрыть") } },
+        )
     }
 
     if (renaming) {
@@ -257,7 +309,15 @@ private fun SubscriptionHeader(
 }
 
 @Composable
-private fun ServerRow(node: ServerNode, selected: Boolean, engine: Engine, ping: Int?, onClick: () -> Unit) {
+private fun ServerRow(
+    node: ServerNode,
+    selected: Boolean,
+    engine: Engine,
+    ping: Int?,
+    record: PingRecord?,
+    test: NodeTest?,
+    onClick: () -> Unit,
+) {
     val supported = node.supports(engine)
     val shape = RoundedCornerShape(18.dp)
     Row(
@@ -286,11 +346,24 @@ private fun ServerRow(node: ServerNode, selected: Boolean, engine: Engine, ping:
                 Chip(protocolLabel(node.type))
                 if (!node.xray) Chip("только Mihomo", color = Palette.Amber)
                 if (!node.mihomo) Chip("только Xray", color = Palette.Amber)
+                when (test?.verdict) {
+                    "silent" -> Chip("не открывает", color = Palette.Red)
+                    "ok" -> test?.let { Chip("${it.ms} мс", color = Palette.Green) }
+                    else -> Unit
+                }
             }
         }
         Spacer(Modifier.width(8.dp))
         Column(horizontalAlignment = Alignment.End) {
             PingText(ping)
+            // Надёжность по истории: показываем, когда проверок набралось достаточно.
+            if (record != null && record.checks >= 3) {
+                Text(
+                    "${(record.successRate * 100).toInt()}% ок",
+                    color = if (record.successRate >= 0.8) Palette.TextMuted else Palette.Amber,
+                    fontSize = 10.sp,
+                )
+            }
             Spacer(Modifier.height(6.dp))
             Box(
                 Modifier

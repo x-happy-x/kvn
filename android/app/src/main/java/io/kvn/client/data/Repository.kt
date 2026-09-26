@@ -30,10 +30,13 @@ class Repository(private val context: Context) {
     private val _settings = MutableStateFlow(loadSettings())
     val settings: StateFlow<AppSettings> = _settings.asStateFlow()
 
-    /** Серверы текущего ядра. */
-    val allNodes: List<ServerNode> get() = nodesFor(_settings.value.engine)
+    /** Серверы, видимые при текущем ядре (у подписок с закреплённым ядром — его серверы). */
+    val allNodes: List<ServerNode> get() = _subscriptions.value.flatMap { it.visibleNodes(_settings.value.engine) }
 
-    fun nodesFor(engine: Engine): List<ServerNode> = _subscriptions.value.flatMap { it.nodesFor(engine) }
+    /** Ядро, на котором работает сервер: закреплённое за его подпиской или текущее. */
+    fun engineFor(node: ServerNode): Engine =
+        _subscriptions.value.firstOrNull { it.id == node.subscriptionId }?.effectiveEngine(_settings.value.engine)
+            ?: _settings.value.engine
 
     fun selectedNode(): ServerNode? {
         val nodes = allNodes
@@ -51,11 +54,12 @@ class Repository(private val context: Context) {
     fun setEngine(engine: Engine) = updateSettings { it.copy(engine = engine) }
 
     /** Добавляет подписку по ссылке или вставленные вручную ссылки серверов. */
-    suspend fun addSubscription(input: String, name: String?): Subscription = withContext(Dispatchers.IO) {
+    suspend fun addSubscription(input: String, name: String?, engine: Engine? = null): Subscription = withContext(Dispatchers.IO) {
         val text = input.trim()
         val id = UUID.randomUUID().toString()
         val subscription = if (text.startsWith("http://") || text.startsWith("https://")) {
-            download(Subscription(id = id, name = name.orEmpty(), url = text), _settings.value.engine)
+            val base = Subscription(id = id, name = name.orEmpty(), url = text, engine = engine)
+            download(base, base.effectiveEngine(_settings.value.engine))
         } else {
             val nodes = ServerNode.listFromLibcore(id, CoreBridge.parseSubscription(text))
             Subscription(
@@ -63,6 +67,7 @@ class Repository(private val context: Context) {
                 name = name?.ifBlank { null } ?: "Свои серверы",
                 url = "",
                 updatedAt = System.currentTimeMillis(),
+                engine = engine,
                 nodesXray = nodes,
                 nodesMihomo = nodes,
             )
@@ -70,7 +75,7 @@ class Repository(private val context: Context) {
         _subscriptions.update { it + subscription }
         persist()
         if (_settings.value.selectedNodeId == null) {
-            subscription.nodesFor(_settings.value.engine).firstOrNull()?.let { selectNode(it) }
+            subscription.visibleNodes(_settings.value.engine).firstOrNull()?.let { selectNode(it) }
         }
         subscription
     }
@@ -79,19 +84,21 @@ class Repository(private val context: Context) {
      * Обновляет подписку для ядра (по умолчанию — текущего). При ошибке оставляет
      * прежние серверы и запоминает текст ошибки.
      */
-    suspend fun refresh(subscriptionId: String, engine: Engine = _settings.value.engine): Result<Subscription> =
+    suspend fun refresh(subscriptionId: String, engine: Engine? = null): Result<Subscription> =
         withContext(Dispatchers.IO) {
             val current = _subscriptions.value.firstOrNull { it.id == subscriptionId }
                 ?: return@withContext Result.failure(IllegalArgumentException("Подписка не найдена"))
             if (!current.remote) return@withContext Result.success(current)
-            val result = runCatching { download(current, engine) }
+            // У подписки с закреплённым ядром серверы нужны только для него.
+            val target = current.engine ?: engine ?: _settings.value.engine
+            val result = runCatching { download(current, target) }
             val updated = result.getOrElse { current.copy(error = it.message ?: it.toString()) }
             replace(updated)
             result
         }
 
-    suspend fun refreshAll(engine: Engine = _settings.value.engine) {
-        _subscriptions.value.filter { it.remote }.forEach { refresh(it.id, engine) }
+    suspend fun refreshAll() {
+        _subscriptions.value.filter { it.remote }.forEach { refresh(it.id) }
     }
 
     /**
@@ -100,10 +107,19 @@ class Repository(private val context: Context) {
      */
     suspend fun ensureNodes(engine: Engine): List<String> {
         val errors = mutableListOf<String>()
-        _subscriptions.value.filter { it.remote && it.nodesFor(engine).isEmpty() }.forEach { subscription ->
+        _subscriptions.value.filter { it.remote && it.engine == null && it.nodesFor(engine).isEmpty() }.forEach { subscription ->
             refresh(subscription.id, engine).onFailure { errors += "${subscription.name}: ${it.message}" }
         }
         return errors
+    }
+
+    /** Закрепляет ядро за подпиской (null — текущее ядро приложения) и докачивает её серверы. */
+    suspend fun setSubscriptionEngine(subscriptionId: String, engine: Engine?): Result<Subscription> {
+        _subscriptions.update { list -> list.map { if (it.id == subscriptionId) it.copy(engine = engine) else it } }
+        persist()
+        val subscription = _subscriptions.value.first { it.id == subscriptionId }
+        val target = subscription.effectiveEngine(_settings.value.engine)
+        return if (subscription.remote && subscription.nodesFor(target).isEmpty()) refresh(subscriptionId, target) else Result.success(subscription)
     }
 
     fun rename(subscriptionId: String, name: String) {
@@ -174,10 +190,9 @@ class Repository(private val context: Context) {
             kept + fresh
         }
         persist()
-        val engine = _settings.value.engine
         val errors = mutableListOf<String>()
         _subscriptions.value.filter { it.source == SubscriptionSource.SUBLAB }.forEach { subscription ->
-            refresh(subscription.id, engine).onFailure { errors += "${subscription.name}: ${it.message}" }
+            refresh(subscription.id).onFailure { errors += "${subscription.name}: ${it.message}" }
         }
         updateSettings { it.copy(account = it.account.copy(syncedAt = System.currentTimeMillis())) }
         if (_settings.value.selectedNodeId == null || selectedNode()?.id != _settings.value.selectedNodeId) {
@@ -258,6 +273,19 @@ class Repository(private val context: Context) {
                 name = prefs.getString("sublabName", "").orEmpty(),
                 syncedAt = prefs.getLong("sublabSyncedAt", 0),
             ),
+            bypass = BypassOptions(
+                fragment = prefs.getBoolean("fragment", false),
+                fragmentPackets = prefs.getString("fragmentPackets", null) ?: BypassOptions().fragmentPackets,
+                fragmentLength = prefs.getString("fragmentLength", null) ?: BypassOptions().fragmentLength,
+                fragmentInterval = prefs.getString("fragmentInterval", null) ?: BypassOptions().fragmentInterval,
+                noise = prefs.getBoolean("noise", false),
+                noiseType = prefs.getString("noiseType", null) ?: BypassOptions().noiseType,
+                noisePacket = prefs.getString("noisePacket", null) ?: BypassOptions().noisePacket,
+                noiseDelay = prefs.getString("noiseDelay", null) ?: BypassOptions().noiseDelay,
+                mux = prefs.getBoolean("mux", false),
+                muxConcurrency = prefs.getInt("muxConcurrency", BypassOptions().muxConcurrency),
+            ),
+            tilePrompted = prefs.getBoolean("tilePrompted", false),
         )
     }
 
@@ -281,6 +309,17 @@ class Repository(private val context: Context) {
             .putString("sublabUsername", settings.account.username)
             .putString("sublabName", settings.account.name)
             .putLong("sublabSyncedAt", settings.account.syncedAt)
+            .putBoolean("fragment", settings.bypass.fragment)
+            .putString("fragmentPackets", settings.bypass.fragmentPackets)
+            .putString("fragmentLength", settings.bypass.fragmentLength)
+            .putString("fragmentInterval", settings.bypass.fragmentInterval)
+            .putBoolean("noise", settings.bypass.noise)
+            .putString("noiseType", settings.bypass.noiseType)
+            .putString("noisePacket", settings.bypass.noisePacket)
+            .putString("noiseDelay", settings.bypass.noiseDelay)
+            .putBoolean("mux", settings.bypass.mux)
+            .putInt("muxConcurrency", settings.bypass.muxConcurrency)
+            .putBoolean("tilePrompted", settings.tilePrompted)
             .apply()
     }
 }

@@ -17,6 +17,8 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
@@ -34,20 +36,25 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.kvn.client.core.Engine
 import io.kvn.client.ui.theme.Palette
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AddSubscriptionSheet(
     initialUrl: String,
+    initialName: String = "",
+    initialEngine: Engine? = null,
+    source: String? = null,
     busy: Boolean,
     onDismiss: () -> Unit,
-    onSubmit: (input: String, name: String) -> Unit,
+    onSubmit: (input: String, name: String, engine: Engine?) -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val clipboard = LocalClipboardManager.current
     var input by remember { mutableStateOf(initialUrl) }
-    var name by remember { mutableStateOf("") }
+    var name by remember { mutableStateOf(initialName) }
+    var engine by remember { mutableStateOf(initialEngine) }
     val fieldColors = OutlinedTextFieldDefaults.colors(
         focusedBorderColor = Palette.Violet,
         unfocusedBorderColor = Palette.Stroke,
@@ -71,7 +78,8 @@ fun AddSubscriptionSheet(
             Text("Новая подписка", fontSize = 22.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(4.dp))
             Text(
-                "Ссылка на подписку или сами ссылки серверов. Формат определится автоматически: список ссылок, base64, Clash YAML или Xray JSON.",
+                source?.let { "Ссылка из $it. Проверьте и добавьте." }
+                    ?: "Ссылка на подписку, ссылка другого клиента (happ://, clash://…) или сами серверы. Формат определится автоматически.",
                 color = Palette.TextSecondary,
                 fontSize = 13.sp,
             )
@@ -95,6 +103,29 @@ fun AddSubscriptionSheet(
                 shape = RoundedCornerShape(14.dp),
                 colors = fieldColors,
             )
+            Spacer(Modifier.height(14.dp))
+            Text("Ядро для этой подписки", color = Palette.TextSecondary, fontSize = 13.sp)
+            Spacer(Modifier.height(6.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf<Engine?>(null, Engine.XRAY, Engine.MIHOMO).forEach { option ->
+                    FilterChip(
+                        selected = engine == option,
+                        onClick = { engine = option },
+                        label = { Text(option?.title ?: "Текущее") },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = Palette.Violet,
+                            selectedLabelColor = Palette.TextPrimary,
+                            containerColor = Palette.Background,
+                            labelColor = Palette.TextSecondary,
+                        ),
+                    )
+                }
+            }
+            Text(
+                if (engine == null) "Серверы работают на ядре, выбранном в настройках." else "При подключении к серверам этой подписки включится ${engine?.title}.",
+                color = Palette.TextMuted,
+                fontSize = 12.sp,
+            )
             Spacer(Modifier.height(16.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedButton(
@@ -107,7 +138,7 @@ fun AddSubscriptionSheet(
                     Text("Из буфера", color = Palette.TextPrimary)
                 }
                 Button(
-                    onClick = { onSubmit(input, name) },
+                    onClick = { onSubmit(input, name, engine) },
                     enabled = input.isNotBlank() && !busy,
                     modifier = Modifier.weight(1f).height(52.dp),
                     shape = RoundedCornerShape(14.dp),

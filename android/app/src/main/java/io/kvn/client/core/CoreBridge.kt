@@ -43,6 +43,18 @@ object CoreBridge {
     /** Проверка одной цели напрямую и через VPN; блокирует поток на 5–30 с. */
     fun scan(target: String): String = Libcore.scan(target)
 
+    /**
+     * Настоящая проверка сервера: отдельный экземпляр ядра без TUN открывает
+     * [url] через прокси. Работающий VPN не трогает.
+     */
+    fun testNode(engine: Engine, nodeJson: String, optionsJson: String, url: String = "", timeoutMs: Int = 8000): String =
+        Libcore.testNode(engine.id, nodeJson, optionsJson, url, timeoutMs)
+
+    fun isHappCrypt5(value: String): Boolean = Libcore.isHappCrypt5(value)
+
+    /** happ://crypt5/… → обычная ссылка. */
+    fun decryptHapp(link: String): String = Libcore.decryptHapp(link)
+
     fun xrayVersion(): String = Libcore.xrayVersion()
 
     fun mihomoVersion(): String = Libcore.mihomoVersion()

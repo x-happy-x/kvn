@@ -20,6 +20,36 @@ type Options struct {
 	IPv6 bool `json:"ipv6"`
 	// LogLevel: debug, info, warning, error.
 	LogLevel string `json:"logLevel"`
+
+	// Опции обхода блокировок, как в Happ. Работают только в Xray: в mihomo
+	// аналогов нет.
+	Fragment FragmentOptions `json:"fragment"`
+	Noise    NoiseOptions    `json:"noise"`
+	Mux      MuxOptions      `json:"mux"`
+}
+
+// FragmentOptions — фрагментация TLS ClientHello (freedom.fragment в xray-core):
+// ТСПУ не собирает SNI из нескольких сегментов.
+type FragmentOptions struct {
+	Enabled  bool   `json:"enabled"`
+	Packets  string `json:"packets"`  // tlshello или диапазон пакетов, например 1-3
+	Length   string `json:"length"`   // размер кусков в байтах, например 100-200
+	Interval string `json:"interval"` // пауза между кусками в мс, например 10-20
+}
+
+// NoiseOptions — «шум» перед UDP-соединениями (freedom.noises): мешает
+// распознать QUIC и прочий UDP по первым пакетам.
+type NoiseOptions struct {
+	Enabled bool   `json:"enabled"`
+	Type    string `json:"type"`   // rand, str или base64
+	Packet  string `json:"packet"` // для rand — длина, например 10-20
+	Delay   string `json:"delay"`  // пауза после шума в мс, например 10-16
+}
+
+// MuxOptions — мультиплексирование соединений (mux.cool).
+type MuxOptions struct {
+	Enabled     bool `json:"enabled"`
+	Concurrency int  `json:"concurrency"`
 }
 
 var privateCIDRs = []string{
@@ -49,6 +79,15 @@ func parseOptions(optionsJSON string) (*Options, error) {
 	if options.MTU <= 0 {
 		options.MTU = 1500
 	}
+	defaultString(&options.Fragment.Packets, "tlshello")
+	defaultString(&options.Fragment.Length, "100-200")
+	defaultString(&options.Fragment.Interval, "10-20")
+	defaultString(&options.Noise.Type, "rand")
+	defaultString(&options.Noise.Packet, "10-20")
+	defaultString(&options.Noise.Delay, "10-16")
+	if options.Mux.Concurrency <= 0 {
+		options.Mux.Concurrency = 8
+	}
 	switch options.LogLevel {
 	case "debug", "info", "warning", "error":
 	default:
@@ -73,4 +112,10 @@ func dnsHost(dns string) string {
 		host = host[:strings.Index(host, ":")]
 	}
 	return host
+}
+
+func defaultString(value *string, fallback string) {
+	if strings.TrimSpace(*value) == "" {
+		*value = fallback
+	}
 }

@@ -31,6 +31,8 @@ import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -42,6 +44,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -54,7 +57,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.kvn.client.data.ScanPath
 import io.kvn.client.data.ScanPreset
+import io.kvn.client.data.NodeTest
 import io.kvn.client.data.ScanResult
+import io.kvn.client.data.ServerNode
 import io.kvn.client.ui.ScanProgress
 import io.kvn.client.ui.theme.Palette
 
@@ -76,9 +81,27 @@ fun ScanScreen(
     onRun: () -> Unit,
     onRunOne: (String) -> Unit,
     onStop: () -> Unit,
+    nodes: List<ServerNode> = emptyList(),
+    nodeTests: Map<String, NodeTest> = emptyMap(),
+    nodeTestProgress: ScanProgress = ScanProgress(),
+    onTestNodes: () -> Unit = {},
+    onStopNodeTests: () -> Unit = {},
 ) {
     var input by remember { mutableStateOf("") }
     var expanded by remember { mutableStateOf<String?>(null) }
+    var serversMode by rememberSaveable { mutableStateOf(false) }
+
+    if (serversMode) {
+        ServersCheck(
+            nodes = nodes,
+            tests = nodeTests,
+            progress = nodeTestProgress,
+            onModeSites = { serversMode = false },
+            onRun = onTestNodes,
+            onStop = onStopNodeTests,
+        )
+        return
+    }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -92,6 +115,8 @@ fun ScanScreen(
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.padding(start = 4.dp, top = 20.dp, bottom = 4.dp),
             )
+            ModeSwitch(servers = false, onChange = { serversMode = it })
+            Spacer(Modifier.height(8.dp))
             Text(
                 if (vpnConnected) {
                     "Каждый сайт проверяется напрямую через оператора и через VPN — видно, что заблокировано и помогает ли прокси."
@@ -354,5 +379,160 @@ private fun ScanDetails(result: ScanResult, onRun: () -> Unit, onRemove: () -> U
                 Icon(Icons.Rounded.Close, contentDescription = "Убрать", tint = Palette.TextMuted)
             }
         }
+    }
+}
+
+@Composable
+private fun ModeSwitch(servers: Boolean, onChange: (Boolean) -> Unit) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(horizontal = 4.dp)) {
+        listOf(false to "Сайты", true to "Серверы").forEach { (value, title) ->
+            FilterChip(
+                selected = servers == value,
+                onClick = { onChange(value) },
+                label = { Text(title) },
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = Palette.Violet,
+                    selectedLabelColor = Palette.TextPrimary,
+                    containerColor = Palette.Surface,
+                    labelColor = Palette.TextSecondary,
+                ),
+            )
+        }
+    }
+}
+
+private fun testRank(test: NodeTest?): Int = when (test?.verdict) {
+    "silent" -> 0
+    "down" -> 1
+    "error" -> 2
+    "ok" -> 3
+    else -> 4
+}
+
+/**
+ * Проверка серверов: каждый открывает страницу через свой прокси. Вверху —
+ * «молчащие»: TCP до них проходит, но через них ничего не открывается.
+ */
+@Composable
+private fun ServersCheck(
+    nodes: List<ServerNode>,
+    tests: Map<String, NodeTest>,
+    progress: ScanProgress,
+    onModeSites: () -> Unit,
+    onRun: () -> Unit,
+    onStop: () -> Unit,
+) {
+    val ordered = nodes.sortedWith(compareBy({ testRank(tests[it.id]) }, { tests[it.id]?.ms ?: Int.MAX_VALUE }))
+    val silent = tests.values.count { it.verdict == "silent" }
+    val working = tests.values.count { it.ok }
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        item {
+            Text(
+                "Проверка",
+                fontSize = 26.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(start = 4.dp, top = 20.dp, bottom = 4.dp),
+            )
+            ModeSwitch(servers = true, onChange = { if (!it) onModeSites() })
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Каждый сервер открывает страницу через себя, отдельно от VPN. Так видно те, что пингуются, но ничего не открывают. Результаты попадают в статистику, и пинг потом начинается с надёжных.",
+                color = Palette.TextSecondary,
+                fontSize = 13.sp,
+                modifier = Modifier.padding(horizontal = 4.dp),
+            )
+            Spacer(Modifier.height(10.dp))
+            Button(
+                onClick = if (progress.running) onStop else onRun,
+                enabled = nodes.isNotEmpty(),
+                shape = RoundedCornerShape(14.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = if (progress.running) Palette.SurfaceHighest else Palette.Violet),
+            ) {
+                Icon(if (progress.running) Icons.Rounded.Stop else Icons.Rounded.PlayArrow, null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text(if (progress.running) "Остановить" else "Проверить все серверы (${nodes.size})")
+            }
+            if (progress.running) {
+                Spacer(Modifier.height(8.dp))
+                LinearProgressIndicator(
+                    progress = { if (progress.total == 0) 0f else progress.done.toFloat() / progress.total },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(4.dp)
+                        .clip(RoundedCornerShape(2.dp)),
+                    color = Palette.Cyan,
+                    trackColor = Palette.SurfaceHighest,
+                )
+                Text("${progress.done} из ${progress.total} · ${progress.current}", color = Palette.TextMuted, fontSize = 12.sp)
+            } else if (tests.isNotEmpty()) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "Работают: $working · пингуются без ответа: $silent · всего: ${tests.size}",
+                    color = Palette.TextMuted,
+                    fontSize = 12.sp,
+                )
+            }
+        }
+        items(ordered, key = { it.id }) { node -> NodeTestRow(node, tests[node.id], progress.running) }
+    }
+}
+
+@Composable
+private fun NodeTestRow(node: ServerNode, test: NodeTest?, running: Boolean) {
+    val shape = RoundedCornerShape(16.dp)
+    val color = when (test?.verdict) {
+        "ok" -> Palette.Green
+        "silent" -> Palette.Red
+        "down", "error" -> Palette.Amber
+        else -> Palette.TextMuted
+    }
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(Palette.Surface)
+            .border(1.dp, Palette.Stroke, shape)
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier
+                .size(10.dp)
+                .clip(CircleShape)
+                .background(color),
+        )
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f)) {
+            Text(node.name, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            val details = when {
+                test == null && running -> "в очереди"
+                test == null -> "не проверялся"
+                else -> listOfNotNull(
+                    when {
+                        test.tcpMs > 0 -> "TCP ${test.tcpMs} мс"
+                        test.tcpMs < 0 -> "TCP нет"
+                        else -> null
+                    },
+                    test.error.ifEmpty { null },
+                ).joinToString(" · ")
+            }
+            Text(details, color = Palette.TextSecondary, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        }
+        Text(
+            when (test?.verdict) {
+                "ok" -> "${test?.ms} мс"
+                "silent" -> "не открывает"
+                "down" -> "недоступен"
+                "error" -> "ошибка"
+                else -> "—"
+            },
+            color = color,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
     }
 }

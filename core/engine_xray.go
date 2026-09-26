@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	xnet "github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/common/platform"
@@ -19,8 +20,9 @@ import (
 )
 
 const (
-	xrayProxyTag = "proxy"
-	xrayTunTag   = "tun"
+	xrayProxyTag    = "proxy"
+	xrayTunTag      = "tun"
+	xrayFragmentTag = "fragment"
 )
 
 type xrayEngine struct {
@@ -32,11 +34,43 @@ type xrayEngine struct {
 // buildXrayConfig собирает полный конфиг xray-core: TUN-вход по fd от
 // VpnService, выбранный сервер и правила обхода.
 func buildXrayConfig(node *Node, options *Options, logPath string) (map[string]any, error) {
+	config, err := buildXrayOutboundConfig(node, options, logPath)
+	if err != nil {
+		return nil, err
+	}
+	config["inbounds"] = []any{map[string]any{
+		"tag":      xrayTunTag,
+		"port":     0,
+		"protocol": "tun",
+		"settings": map[string]any{"name": "xray0", "MTU": options.MTU},
+		"sniffing": map[string]any{
+			"enabled":      true,
+			"destOverride": []string{"http", "tls", "quic"},
+			"routeOnly":    true,
+		},
+	}}
+	return config, nil
+}
+
+// buildXrayOutboundConfig — конфиг без входов: сервер, обход блокировок и
+// правила. Годится и для отдельной проверки сервера, где TUN не нужен.
+func buildXrayOutboundConfig(node *Node, options *Options, logPath string) (map[string]any, error) {
 	if node.Xray == nil {
 		return nil, fmt.Errorf("сервер «%s» (%s) не поддерживается ядром Xray", node.Name, node.Type)
 	}
 	proxy := deepCopy(node.Xray).(map[string]any)
 	proxy["tag"] = xrayProxyTag
+	outbounds := []any{proxy}
+	if fragment := xrayFragmentOutbound(proxy, options); fragment != nil {
+		outbounds = append(outbounds, fragment)
+	}
+	if options.Mux.Enabled && muxAllowed(proxy) {
+		proxy["mux"] = map[string]any{"enabled": true, "concurrency": options.Mux.Concurrency}
+	}
+	outbounds = append(outbounds,
+		map[string]any{"tag": "direct", "protocol": "freedom"},
+		map[string]any{"tag": "block", "protocol": "blackhole"},
+	)
 
 	var rules []any
 	if options.BypassLAN {
@@ -60,26 +94,64 @@ func buildXrayConfig(node *Node, options *Options, logPath string) (map[string]a
 	}
 
 	return map[string]any{
-		"log": logConfig,
-		"dns": map[string]any{"servers": []any{dnsHost(options.DNS)}},
-		"inbounds": []any{map[string]any{
-			"tag":      xrayTunTag,
-			"port":     0,
-			"protocol": "tun",
-			"settings": map[string]any{"name": "xray0", "MTU": options.MTU},
-			"sniffing": map[string]any{
-				"enabled":      true,
-				"destOverride": []string{"http", "tls", "quic"},
-				"routeOnly":    true,
-			},
-		}},
-		"outbounds": []any{
-			proxy,
-			map[string]any{"tag": "direct", "protocol": "freedom"},
-			map[string]any{"tag": "block", "protocol": "blackhole"},
-		},
-		"routing": map[string]any{"domainStrategy": "AsIs", "rules": rules},
+		"log":       logConfig,
+		"dns":       map[string]any{"servers": []any{dnsHost(options.DNS)}},
+		"outbounds": outbounds,
+		"routing":   map[string]any{"domainStrategy": "AsIs", "rules": rules},
 	}, nil
+}
+
+// xrayFragmentOutbound — freedom с фрагментацией и шумом, через который сервер
+// подключается к прокси (sockopt.dialerProxy), как это делает Happ.
+func xrayFragmentOutbound(proxy map[string]any, options *Options) map[string]any {
+	if !options.Fragment.Enabled && !options.Noise.Enabled {
+		return nil
+	}
+	stream := mapOf(proxy["streamSettings"])
+	if stream == nil {
+		stream = map[string]any{}
+		proxy["streamSettings"] = stream
+	}
+	// Hysteria идёт поверх QUIC: TCP-фрагментация к нему неприменима.
+	if network := stringOf(stream["network"]); network == "hysteria" || network == "kcp" || network == "mkcp" {
+		return nil
+	}
+	settings := map[string]any{}
+	if options.Fragment.Enabled {
+		settings["fragment"] = map[string]any{
+			"packets":  options.Fragment.Packets,
+			"length":   options.Fragment.Length,
+			"interval": options.Fragment.Interval,
+		}
+	}
+	if options.Noise.Enabled {
+		settings["noises"] = []any{map[string]any{
+			"type":   options.Noise.Type,
+			"packet": options.Noise.Packet,
+			"delay":  options.Noise.Delay,
+		}}
+	}
+	sockopt := mapOf(stream["sockopt"])
+	if sockopt == nil {
+		sockopt = map[string]any{}
+		stream["sockopt"] = sockopt
+	}
+	sockopt["dialerProxy"] = xrayFragmentTag
+	return map[string]any{
+		"tag":            xrayFragmentTag,
+		"protocol":       "freedom",
+		"settings":       settings,
+		"streamSettings": map[string]any{"sockopt": map[string]any{"tcpNoDelay": true}},
+	}
+}
+
+// muxAllowed: XTLS Vision и Hysteria с mux несовместимы.
+func muxAllowed(proxy map[string]any) bool {
+	if stringOf(proxy["protocol"]) == "hysteria" {
+		return false
+	}
+	flow := stringOf(xrayUser(mapOf(proxy["settings"]))["flow"])
+	return !strings.HasPrefix(flow, "xtls-rprx-vision")
 }
 
 func startXray(node *Node, options *Options, fd int) (*xrayEngine, error) {

@@ -87,3 +87,27 @@ private fun JSONArray?.strings(): List<String> {
     if (this == null) return emptyList()
     return (0 until length()).map { optString(it) }.filter { it.isNotEmpty() }
 }
+
+/** Результат настоящей проверки сервера (libcore.TestNode). */
+data class NodeTest(
+    val tcpMs: Int,
+    val ok: Boolean,
+    val ms: Int,
+    val status: Int,
+    val error: String,
+    /** ok — работает; silent — пингуется, но ничего не открывает; down — недоступен; error — ядро не приняло. */
+    val verdict: String,
+) {
+    companion object {
+        fun fromJson(json: JSONObject) = NodeTest(
+            tcpMs = json.optInt("tcpMs"),
+            ok = json.optBoolean("ok"),
+            ms = json.optInt("ms"),
+            status = json.optInt("status"),
+            error = json.optString("error"),
+            verdict = json.optString("verdict"),
+        )
+
+        fun failed(message: String) = NodeTest(0, false, 0, 0, message, "error")
+    }
+}

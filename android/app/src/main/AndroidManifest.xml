@@ -36,12 +36,63 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <!-- Импорт подписки по ссылке kvn://import?url=... -->
+            <!-- Ссылки импорта других VPN-клиентов (happ://, clash://, sing-box://…) и kvn://import -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="kvn" android:host="import" />
+                <data android:scheme="kvn" />
+                <data android:scheme="happ" />
+                <data android:scheme="v2rayng" />
+                <data android:scheme="v2raytun" />
+                <data android:scheme="v2box" />
+                <data android:scheme="streisand" />
+                <data android:scheme="incy" />
+                <data android:scheme="npvtunnel" />
+                <data android:scheme="clash" />
+                <data android:scheme="clashmeta" />
+                <data android:scheme="clash-verge" />
+                <data android:scheme="mihomo" />
+                <data android:scheme="flclash" />
+                <data android:scheme="flclashx" />
+                <data android:scheme="koala-clash" />
+                <data android:scheme="clashmi" />
+                <data android:scheme="stash" />
+                <data android:scheme="prizrak-box" />
+                <data android:scheme="sing-box" />
+                <data android:scheme="sing-box-sfa" />
+                <data android:scheme="hiddify" />
+                <data android:scheme="karing" />
+                <data android:scheme="sn" />
+                <data android:scheme="nekobox" />
+                <data android:scheme="throne" />
+                <data android:scheme="exclave" />
+                <data android:scheme="sub" />
+                <data android:scheme="shadowrocket" />
+            </intent-filter>
+            <!-- Сами серверы: vless://, vmess://, trojan://… -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="vless" />
+                <data android:scheme="vmess" />
+                <data android:scheme="trojan" />
+                <data android:scheme="ss" />
+                <data android:scheme="ssr" />
+                <data android:scheme="hysteria" />
+                <data android:scheme="hysteria2" />
+                <data android:scheme="hy2" />
+                <data android:scheme="tuic" />
+                <data android:scheme="wireguard" />
+                <data android:scheme="wg" />
+                <data android:scheme="anytls" />
+            </intent-filter>
+            <!-- «Поделиться» текстом со ссылкой на подписку или сервер. -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
             </intent-filter>
         </activity>
 

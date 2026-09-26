@@ -35,6 +35,10 @@ import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Sync
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.Wifi
+import androidx.compose.material.icons.rounded.ContentCut
+import androidx.compose.material.icons.rounded.GraphicEq
+import androidx.compose.material.icons.rounded.Layers
+import androidx.compose.material.icons.rounded.ToggleOn
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
@@ -61,6 +65,7 @@ import androidx.compose.ui.unit.sp
 import io.kvn.client.core.Engine
 import io.kvn.client.data.AppMode
 import io.kvn.client.data.AppSettings
+import io.kvn.client.data.BypassOptions
 import io.kvn.client.data.Mimicry
 import io.kvn.client.data.WifiMode
 import io.kvn.client.ui.components.EngineSwitch
@@ -82,6 +87,7 @@ fun SettingsScreen(
     onLogout: () -> Unit,
     onOpenApps: () -> Unit,
     onOpenWifi: () -> Unit,
+    onAddTile: (() -> Unit)?,
     loadLogs: suspend () -> String,
     loadConfig: suspend () -> String,
 ) {
@@ -151,6 +157,9 @@ fun SettingsScreen(
             }
         }
 
+        SectionTitle("Обход блокировок (Xray)")
+        BypassPanel(settings.bypass, settings.engine) { transform -> onUpdate(true) { it.copy(bypass = transform(it.bypass)) } }
+
         SectionTitle("Сеть")
         Panel(Modifier.fillMaxWidth()) {
             ValueRow(Icons.Rounded.Dns, "DNS", settings.dns) { editing = EditField.DNS }
@@ -160,6 +169,13 @@ fun SettingsScreen(
             ValueRow(Icons.Rounded.Person, "User-Agent для Mihomo", Mimicry.userAgent(Engine.MIHOMO, settings)) { editing = EditField.UA_MIHOMO }
             Divider()
             ValueRow(Icons.Rounded.Tune, "Уровень журнала", settings.logLevel) { editing = EditField.LOG_LEVEL }
+        }
+
+        if (onAddTile != null) {
+            SectionTitle("Быстрый доступ")
+            Panel(Modifier.fillMaxWidth()) {
+                ValueRow(Icons.Rounded.ToggleOn, "Плитка в шторке", "Включать и выключать VPN из панели быстрых настроек", onAddTile)
+            }
         }
 
         SectionTitle("Диагностика")
@@ -390,4 +406,103 @@ private fun TextViewer(dialog: TextDialog, onDismiss: () -> Unit) {
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("Закрыть") } },
     )
+}
+
+/** Параметр обхода блокировок, который правится в диалоге. */
+private class BypassParam(
+    val title: String,
+    val hint: String,
+    val value: String,
+    val apply: (BypassOptions, String) -> BypassOptions,
+)
+
+/**
+ * Опции как в Happ: фрагментация ClientHello, шум перед UDP и mux. В mihomo
+ * аналогов нет, поэтому при нём настройки просто хранятся до переключения.
+ */
+@Composable
+private fun BypassPanel(bypass: BypassOptions, engine: Engine, onChange: ((BypassOptions) -> BypassOptions) -> Unit) {
+    var editing by remember { mutableStateOf<BypassParam?>(null) }
+    Panel(Modifier.fillMaxWidth()) {
+        if (engine == Engine.MIHOMO) {
+            Text("Сейчас выбрано ядро Mihomo: эти опции включатся при переключении на Xray.", color = Palette.Amber, fontSize = 12.sp)
+            Spacer(Modifier.height(4.dp))
+        }
+        ToggleRow(Icons.Rounded.ContentCut, "Фрагментация", "Режет TLS ClientHello на куски: ТСПУ не видит SNI", bypass.fragment) { value ->
+            onChange { it.copy(fragment = value) }
+        }
+        if (bypass.fragment) {
+            ParamRow("Пакеты", bypass.fragmentPackets) {
+                editing = BypassParam("Какие пакеты резать", "tlshello — только ClientHello, или диапазон пакетов: 1-3", bypass.fragmentPackets) { b, v -> b.copy(fragmentPackets = v) }
+            }
+            ParamRow("Длина кусков, байт", bypass.fragmentLength) {
+                editing = BypassParam("Длина кусков", "Диапазон в байтах, например 100-200 или 10-20", bypass.fragmentLength) { b, v -> b.copy(fragmentLength = v) }
+            }
+            ParamRow("Интервал, мс", bypass.fragmentInterval) {
+                editing = BypassParam("Интервал между кусками", "Диапазон в миллисекундах, например 10-20", bypass.fragmentInterval) { b, v -> b.copy(fragmentInterval = v) }
+            }
+        }
+        Divider()
+        ToggleRow(Icons.Rounded.GraphicEq, "Шум (Noise)", "Случайные пакеты перед UDP/QUIC", bypass.noise) { value ->
+            onChange { it.copy(noise = value) }
+        }
+        if (bypass.noise) {
+            ParamRow("Тип", bypass.noiseType) {
+                editing = BypassParam("Тип шума", "rand — случайные байты, str — строка, base64 — байты в base64", bypass.noiseType) { b, v -> b.copy(noiseType = v) }
+            }
+            ParamRow("Пакет", bypass.noisePacket) {
+                editing = BypassParam("Пакет шума", "Для rand — длина, например 10-20; для str/base64 — содержимое", bypass.noisePacket) { b, v -> b.copy(noisePacket = v) }
+            }
+            ParamRow("Задержка, мс", bypass.noiseDelay) {
+                editing = BypassParam("Задержка после шума", "Диапазон в миллисекундах, например 10-16", bypass.noiseDelay) { b, v -> b.copy(noiseDelay = v) }
+            }
+        }
+        Divider()
+        ToggleRow(Icons.Rounded.Layers, "Mux", "Несколько соединений в одном (не для XTLS Vision)", bypass.mux) { value ->
+            onChange { it.copy(mux = value) }
+        }
+        if (bypass.mux) {
+            ParamRow("Потоков в соединении", bypass.muxConcurrency.toString()) {
+                editing = BypassParam("Mux: потоков в соединении", "От 1 до 128, обычно 8", bypass.muxConcurrency.toString()) { b, v ->
+                    b.copy(muxConcurrency = v.toIntOrNull()?.coerceIn(1, 128) ?: b.muxConcurrency)
+                }
+            }
+        }
+    }
+    editing?.let { param ->
+        var value by remember(param) { mutableStateOf(param.value) }
+        AlertDialog(
+            onDismissRequest = { editing = null },
+            containerColor = Palette.SurfaceHigh,
+            title = { Text(param.title) },
+            text = {
+                Column {
+                    Text(param.hint, color = Palette.TextSecondary, fontSize = 13.sp)
+                    Spacer(Modifier.height(12.dp))
+                    OutlinedTextField(value = value, onValueChange = { value = it }, singleLine = true)
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    editing = null
+                    if (value.isNotBlank()) onChange { param.apply(it, value.trim()) }
+                }) { Text("Сохранить") }
+            },
+            dismissButton = { TextButton(onClick = { editing = null }) { Text("Отмена") } },
+        )
+    }
+}
+
+@Composable
+private fun ParamRow(title: String, value: String, onClick: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(start = 46.dp, top = 6.dp, bottom = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(title, color = Palette.TextSecondary, fontSize = 13.sp, modifier = Modifier.weight(1f))
+        Text(value, color = Palette.VioletSoft, fontSize = 13.sp, fontFamily = FontFamily.Monospace)
+    }
 }
