@@ -19,6 +19,8 @@ import io.kvn.client.core.CoreBridge
 import io.kvn.client.data.AppMode
 import io.kvn.client.data.AppSettings
 import io.kvn.client.data.DnsCheck
+import io.kvn.client.data.PingMethod
+import io.kvn.client.data.Pinger
 import io.kvn.client.data.WifiMode
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -29,11 +31,14 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
@@ -91,8 +96,11 @@ class KvnVpnService : VpnService() {
             pause(reason)
             return
         }
+        watchNetwork()
         // Перезапуск (смена ядра, сервера, правил) — выбор пользователя не трогаем.
-        if (!reuseTun) autoSelect()
+        if (!reuseTun) {
+            if (settings.auto.selectBest) autoSelect() else precheck()
+        }
         connect(reuseTun)
     }
 
@@ -111,6 +119,51 @@ class KvnVpnService : VpnService() {
             repository.selectNode(best)
         } else {
             VpnController.notify("Авто-режим: ни один сервер не открыл страницу, подключаюсь к выбранному")
+        }
+    }
+
+    /**
+     * Без авто-режима: быстрая проверка выбранного сервера перед подключением
+     * (старый пинг мог быть сделан в другой сети). Не отвечает — ищем рабочий
+     * и подключаемся к нему, об этом сообщаем.
+     */
+    private suspend fun precheck() {
+        val repository = KvnApp.instance.repository
+        val node = repository.selectedNode() ?: return
+        val settings = repository.settings.value
+        val quick = if (settings.checks.pingMethod == PingMethod.ICMP) PingMethod.ICMP else PingMethod.TCP
+        val ms = withContext(Dispatchers.IO) { Pinger.ping(node, repository.engineFor(node), settings, quick) }
+        if (ms >= 0) return
+        KvnApp.instance.pingStats.record(node, false, 0)
+        VpnController.update(VpnState.Connecting)
+        promoteToForeground("«${node.title}» не отвечает — ищу другой сервер…")
+        val best = selector.pickBest(exclude = setOf(node.id), around = node)
+        if (best != null) {
+            repository.selectNode(best)
+            VpnController.notify("«${node.title}» не отвечает в этой сети — подключаюсь к «${best.title}»")
+        } else {
+            VpnController.notify("«${node.title}» не отвечает, других рабочих серверов не нашлось — пробую подключиться")
+        }
+    }
+
+    /** Следит за сменой сети (Wi-Fi ↔ мобильная, другой Wi-Fi) пока сервис жив. */
+    private var networkJob: Job? = null
+
+    /**
+     * Сеть сменилась при подключённом VPN — проверяем соединение через пару
+     * секунд, не дожидаясь интервала; при неудаче переключение идёт быстрее.
+     */
+    private fun watchNetwork() {
+        if (networkJob?.isActive == true) return
+        networkJob = scope.launch {
+            KvnApp.instance.network.state
+                .map { it.key }
+                .distinctUntilChanged()
+                .drop(1)
+                .collect { key ->
+                    Log.i(TAG, "network changed: $key")
+                    if (VpnController.state.value is VpnState.Connected) startHealthLoop(afterNetworkChange = true)
+                }
         }
     }
 
@@ -208,18 +261,23 @@ class KvnVpnService : VpnService() {
      * N минут. Проверка — открыть адреса проверки через VPN (хватит одного) и,
      * если включено, получить ответ выбранного DNS через туннель.
      */
-    private fun startHealthLoop() {
+    private fun startHealthLoop(afterNetworkChange: Boolean = false) {
         healthJob?.cancel()
         val settings = KvnApp.instance.repository.settings.value
         val auto = settings.auto
         val checks = settings.checks
-        if (!auto.healthCheck && !checks.afterConnect) return
+        if (!auto.healthCheck && !checks.afterConnect && !afterNetworkChange) return
+        // После смены сети сервер мог стать недоступен: проверяем сразу и
+        // меняем его уже после двух неудач подряд с короткой паузой.
+        val failureLimit = if (afterNetworkChange) auto.failures.coerceIn(1, 2) else auto.failures.coerceAtLeast(1)
         healthJob = scope.launch {
             var failures = 0
             var first = true
             while (isActive) {
                 val wait = when {
+                    failures > 0 && afterNetworkChange -> NETWORK_RETRY_MS
                     failures > 0 -> checks.retrySeconds.coerceAtLeast(5) * 1000L
+                    first && afterNetworkChange -> NETWORK_CHECK_DELAY_MS
                     first && checks.afterConnect -> checks.afterConnectDelaySec.coerceAtLeast(1) * 1000L
                     else -> auto.intervalMinutes.coerceAtLeast(1) * 60_000L
                 }
@@ -234,8 +292,8 @@ class KvnVpnService : VpnService() {
                     continue
                 }
                 failures++
-                Log.w(TAG, "health check failed ($failures/${auto.failures}): $error")
-                if (failures < auto.failures.coerceAtLeast(1)) continue
+                Log.w(TAG, "health check failed ($failures/$failureLimit): $error")
+                if (failures < failureLimit) continue
                 if (!auto.failover) {
                     VpnController.notify("Соединение не работает ($failures раз подряд): $error")
                     failures = 0
@@ -339,6 +397,8 @@ class KvnVpnService : VpnService() {
     }
 
     private fun shutdown() {
+        networkJob?.cancel()
+        networkJob = null
         enabled = false
         stopWifiMonitor()
         VpnController.update(VpnState.Stopping)
@@ -374,7 +434,7 @@ class KvnVpnService : VpnService() {
 
     private fun promoteToForeground(text: String) {
         val manager = getSystemService(NotificationManager::class.java)
-        manager.createNotificationChannel(
+        manager?.createNotificationChannel(
             NotificationChannel(CHANNEL_ID, getString(R.string.notification_channel), NotificationManager.IMPORTANCE_LOW)
                 .apply { setShowBadge(false) },
         )
@@ -421,6 +481,10 @@ class KvnVpnService : VpnService() {
         private const val CHANNEL_ID = "vpn"
         private const val NOTIFICATION_ID = 1
         private const val MTU = 1500
+
+        /** Через сколько после смены сети проверять соединение и как часто повторять. */
+        private const val NETWORK_CHECK_DELAY_MS = 4_000L
+        private const val NETWORK_RETRY_MS = 5_000L
         private const val TUN_ADDRESS = "172.19.0.1"
         private const val TUN_ADDRESS6 = "fdfe:dcba:9876::1"
     }

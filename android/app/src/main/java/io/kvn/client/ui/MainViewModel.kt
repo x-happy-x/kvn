@@ -63,6 +63,20 @@ data class Traffic(
 /** Результат пинга: -1 — сервер недоступен. */
 typealias Pings = Map<String, Int>
 
+/** Ход обновления приложения. */
+sealed interface UpdateState {
+    data object Idle : UpdateState
+    data object Checking : UpdateState
+    data object UpToDate : UpdateState
+    data class Available(val info: io.kvn.client.data.UpdateInfo) : UpdateState
+    data class Downloading(val info: io.kvn.client.data.UpdateInfo, val progress: Float) : UpdateState
+    data class Ready(val info: io.kvn.client.data.UpdateInfo, val file: java.io.File) : UpdateState
+    data class Failed(val message: String) : UpdateState
+}
+
+/** Когда и в какой сети сделана последняя серия пингов. */
+data class PingMeta(val at: Long = 0, val network: String = "")
+
 /** Установленное приложение для выборочного проксирования. */
 data class InstalledApp(val packageName: String, val label: String, val system: Boolean)
 
@@ -84,6 +98,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _pings = MutableStateFlow<Pings>(emptyMap())
     val pings: StateFlow<Pings> = _pings.asStateFlow()
+
+    /** Сеть под VPN: Wi-Fi или мобильная, с именем. */
+    val network: StateFlow<io.kvn.client.data.NetworkId> = (application as KvnApp).network.state
+
+    private val _pingMeta = MutableStateFlow(PingMeta())
+
+    private val minuteTicker = kotlinx.coroutines.flow.flow {
+        while (true) {
+            emit(Unit)
+            delay(60_000)
+        }
+    }
+
+    /**
+     * Пинги устарели: их не было, они старше [PING_STALE_MS] или сделаны в
+     * другой сети. Экран серверов тогда пингует заново, а значения серые.
+     */
+    val pingsStale: StateFlow<Boolean> = combine(_pingMeta, network, minuteTicker) { meta, net, _ ->
+        meta.at == 0L || meta.network != net.key || System.currentTimeMillis() - meta.at > PING_STALE_MS
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, true)
 
     private val _pinging = MutableStateFlow(false)
     val pinging: StateFlow<Boolean> = _pinging.asStateFlow()
@@ -139,9 +173,68 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var scanJob: Job? = null
     private var nodeTestJob: Job? = null
 
+    private val _update = MutableStateFlow<UpdateState>(UpdateState.Idle)
+    val update: StateFlow<UpdateState> = _update.asStateFlow()
+
+    /** Скачанный APK — экран открывает установщик. */
+    private val _installRequests = MutableSharedFlow<java.io.File>(extraBufferCapacity = 1)
+    val installRequests: SharedFlow<java.io.File> = _installRequests.asSharedFlow()
+
+    /** Проверка обновлений; [manual] — по кнопке: тогда «последняя версия» тоже сообщается. */
+    fun checkUpdates(manual: Boolean = true) {
+        if (_update.value is UpdateState.Checking || _update.value is UpdateState.Downloading) return
+        viewModelScope.launch {
+            _update.value = UpdateState.Checking
+            val channel = settings.value.updateChannel
+            _update.value = runCatching { withContext(Dispatchers.IO) { io.kvn.client.data.Updater.check(channel) } }
+                .fold(
+                    onSuccess = { info -> if (info != null) UpdateState.Available(info) else UpdateState.UpToDate },
+                    onFailure = { UpdateState.Failed(it.message ?: "Не удалось проверить обновления") },
+                )
+            updateSettings(restart = false) { it.copy(lastUpdateCheck = System.currentTimeMillis()) }
+            // Фоновая проверка без находок не должна висеть на экране.
+            if (!manual && _update.value !is UpdateState.Available) _update.value = UpdateState.Idle
+        }
+    }
+
+    fun setUpdateChannel(channel: io.kvn.client.data.UpdateChannel) {
+        updateSettings(restart = false) { it.copy(updateChannel = channel) }
+        _update.value = UpdateState.Idle
+        checkUpdates(manual = true)
+    }
+
+    /** Скачивает найденное обновление и передаёт APK установщику. */
+    fun installUpdate() {
+        val state = _update.value
+        if (state is UpdateState.Ready) {
+            _installRequests.tryEmit(state.file)
+            return
+        }
+        val info = (state as? UpdateState.Available)?.info ?: return
+        viewModelScope.launch {
+            _update.value = UpdateState.Downloading(info, 0f)
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    io.kvn.client.data.Updater.download(getApplication(), info) { progress ->
+                        _update.value = UpdateState.Downloading(info, progress)
+                    }
+                }
+            }.onSuccess { file ->
+                _update.value = UpdateState.Ready(info, file)
+                _installRequests.tryEmit(file)
+            }.onFailure {
+                _update.value = UpdateState.Available(info)
+                _messages.tryEmit(it.message ?: "Не удалось скачать обновление")
+            }
+        }
+    }
+
     init {
         viewModelScope.launch {
             VpnController.events.collect { _messages.emit(it) }
+        }
+        if (settings.value.autoUpdateCheck && System.currentTimeMillis() - settings.value.lastUpdateCheck > 12 * 3600_000L) {
+            checkUpdates(manual = false)
         }
         viewModelScope.launch {
             vpnState.collect { state ->
@@ -208,6 +301,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 return@launch
             }
             _pings.value = emptyMap()
+            _pingMeta.value = PingMeta()
             restartIfActive()
         }
     }
@@ -360,6 +454,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }.forEach { it.join() }
             pingStats.save()
+            _pingMeta.value = PingMeta(System.currentTimeMillis(), network.value.key)
             _statsVersion.update { it + 1 }
             _pinging.value = false
         }
@@ -545,6 +640,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setServerView(view: io.kvn.client.data.ServerView) = updateSettings(restart = false) { it.copy(serverView = view) }
 
+    fun setServerGrouping(grouping: io.kvn.client.data.ServerGrouping) = updateSettings(restart = false) { it.copy(serverGrouping = grouping) }
+
+    /**
+     * Свой порядок после перетаскивания: показанные серверы — в новом порядке,
+     * остальные (свёрнутые, выключенные) сохраняют свои места в конце.
+     */
+    fun setServerOrder(visible: List<String>) = updateSettings(restart = false) { settings ->
+        val rest = settings.serverOrder.filter { it !in visible }
+        settings.copy(serverOrder = visible + rest)
+    }
+
     // ---------- лучший сервер и статистика ----------
 
     private val _findingBest = MutableStateFlow(false)
@@ -575,6 +681,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /** Статистика для экрана проверок; пересчитывается по [statsVersion]. */
+    /** Пингует заново, если прошлые пинги устарели (экран серверов открыт). */
+    fun pingIfStale() {
+        if (pingsStale.value && subscriptions.value.isNotEmpty()) pingAll()
+    }
+
     fun statsReport(): io.kvn.client.data.StatsReport =
         io.kvn.client.data.StatsReport.build(subscriptions.value, { it.visibleNodes(settings.value.engine) }, pingStats.snapshot())
 
@@ -759,5 +870,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         trafficJob?.cancel()
         trafficJob = null
         _traffic.value = Traffic()
+    }
+
+    companion object {
+        /** Пинги старше 10 минут показываются серыми и обновляются. */
+        const val PING_STALE_MS = 10 * 60_000L
     }
 }

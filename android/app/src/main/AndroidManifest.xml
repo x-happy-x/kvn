@@ -3,6 +3,8 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Установка обновлений KVN из релизов GitHub. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- Сканер QR; телефоны без камеры приложение тоже поддерживает. -->
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-feature
@@ -132,6 +134,16 @@
                 android:name="android.service.quicksettings.ACTIVE_TILE"
                 android:value="false" />
         </service>
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.updates"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/update_paths" />
+        </provider>
+
         <!-- Сканер QR из zxing-android-embedded: поворачивается вместе с телефоном. -->
         <activity
             android:name="com.journeyapps.barcodescanner.CaptureActivity"

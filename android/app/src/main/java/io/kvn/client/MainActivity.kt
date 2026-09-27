@@ -150,6 +150,26 @@ class MainActivity : ComponentActivity() {
         viewModel.importScanned(text)?.let { pendingImport.value = it.copy(client = "QR-кода") }
     }
 
+    /**
+     * Установка скачанного обновления. Android 8+ просит разрешить установку
+     * из этого приложения — тогда открываем настройки, а после возврата
+     * пользователь нажимает «Обновить» ещё раз.
+     */
+    private fun installApk(file: java.io.File) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !packageManager.canRequestPackageInstalls()) {
+            viewModel.showMessage("Разрешите KVN устанавливать обновления и нажмите «Обновить» ещё раз")
+            runCatching {
+                startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")))
+            }
+            return
+        }
+        val uri = androidx.core.content.FileProvider.getUriForFile(this, "$packageName.updates", file)
+        val intent = Intent(Intent.ACTION_VIEW)
+            .setDataAndType(uri, "application/vnd.android.package-archive")
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+        runCatching { startActivity(intent) }.onFailure { viewModel.showMessage("Не удалось открыть установщик: ${it.message}") }
+    }
+
     private fun scanQr() {
         qrScanner.launch(
             ScanOptions()
@@ -183,6 +203,7 @@ class MainActivity : ComponentActivity() {
         )
         askNotificationPermission()
         handleIntent(intent)
+        lifecycleScope.launch { viewModel.installRequests.collect { installApk(it) } }
 
         setContent {
             KvnTheme {
@@ -364,6 +385,9 @@ private fun App(
     val dnsChecks by viewModel.dnsChecks.collectAsStateWithLifecycle()
     val dnsChecking by viewModel.dnsChecking.collectAsStateWithLifecycle()
     val findingBest by viewModel.findingBest.collectAsStateWithLifecycle()
+    val pingsStale by viewModel.pingsStale.collectAsStateWithLifecycle()
+    val network by viewModel.network.collectAsStateWithLifecycle()
+    val update by viewModel.update.collectAsStateWithLifecycle()
 
     var tab by rememberSaveable { mutableStateOf(Tab.HOME) }
     var overlay by rememberSaveable { mutableStateOf(Overlay.NONE) }
@@ -509,6 +533,9 @@ private fun App(
                             onHelp = { showIntro = true },
                             findingBest = findingBest,
                             onFindBest = viewModel::findBest,
+                            pingStale = pingsStale,
+                            update = update,
+                            onUpdate = viewModel::installUpdate,
                         )
                         Tab.SERVERS -> ServersScreen(
                             subscriptions = subscriptions,
@@ -528,8 +555,14 @@ private fun App(
                             nodeTests = nodeTests,
                             statsVersion = statsVersion,
                             pingRecord = viewModel::pingRecord,
+                            grouping = settings.serverGrouping,
+                            onGrouping = viewModel::setServerGrouping,
                             sort = settings.serverSort,
                             onSort = viewModel::setServerSort,
+                            order = settings.serverOrder,
+                            onReorder = viewModel::setServerOrder,
+                            pingsStale = pingsStale,
+                            onOpen = viewModel::pingIfStale,
                             onToggleEnabled = viewModel::setSubscriptionEnabled,
                             onToggleCollapsed = viewModel::toggleCollapsed,
                             shareLink = viewModel::shareLink,
@@ -558,9 +591,10 @@ private fun App(
                             nodeTestProgress = nodeTestProgress,
                             onTestNodes = viewModel::testAllNodes,
                             onStopNodeTests = viewModel::stopNodeTests,
-                            stats = remember(statsVersion, subscriptions, settings.engine) { viewModel.statsReport() },
+                            stats = remember(statsVersion, subscriptions, settings.engine, network.kind) { viewModel.statsReport() },
                             onResetStats = viewModel::resetStats,
                             onAddToWhitelist = viewModel::addToWhitelist,
+                            networkLabel = network.label,
                         )
                         Tab.SETTINGS -> SettingsScreen(
                             settings = settings,
@@ -578,6 +612,10 @@ private fun App(
                             onOpenDns = { overlay = Overlay.DNS },
                             onChecks = viewModel::updateChecks,
                             onSubLabTags = viewModel::setSubLabTags,
+                            update = update,
+                            onCheckUpdates = { viewModel.checkUpdates(manual = true) },
+                            onInstallUpdate = viewModel::installUpdate,
+                            onUpdateChannel = viewModel::setUpdateChannel,
                             onAddTile = onAddTile,
                             loadLogs = viewModel::logs,
                             loadConfig = viewModel::configPreview,

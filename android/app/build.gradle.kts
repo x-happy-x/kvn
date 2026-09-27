@@ -94,6 +94,7 @@ dependencies {
     implementation(libs.androidx.compose.material.icons)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.zxing.core)
+    implementation(libs.reorderable)
     implementation(libs.zxing.embedded) { isTransitive = false }
     debugImplementation(libs.androidx.compose.ui.tooling)
 }

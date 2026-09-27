@@ -85,6 +85,12 @@ import io.kvn.client.data.AppSettings
 import io.kvn.client.data.AutoOptions
 import io.kvn.client.data.BypassOptions
 import io.kvn.client.data.CheckOptions
+import io.kvn.client.data.UpdateChannel
+import io.kvn.client.data.Updater
+import io.kvn.client.ui.UpdateState
+import androidx.compose.material.icons.rounded.SystemUpdate
+import androidx.compose.material.icons.rounded.Update
+import androidx.compose.material3.LinearProgressIndicator
 import io.kvn.client.data.PingMethod
 import io.kvn.client.data.Mimicry
 import io.kvn.client.data.WifiMode
@@ -112,6 +118,10 @@ fun SettingsScreen(
     onOpenDns: () -> Unit = {},
     onChecks: ((CheckOptions) -> CheckOptions) -> Unit = {},
     onSubLabTags: (Set<String>) -> Unit = {},
+    update: UpdateState = UpdateState.Idle,
+    onCheckUpdates: () -> Unit = {},
+    onInstallUpdate: () -> Unit = {},
+    onUpdateChannel: (UpdateChannel) -> Unit = {},
     onAddTile: (() -> Unit)?,
     loadLogs: suspend () -> String,
     loadConfig: suspend () -> String,
@@ -179,6 +189,11 @@ fun SettingsScreen(
                 Divider()
                 ValueRow(Icons.Rounded.ToggleOn, "Плитка в шторке", "Включать и выключать VPN из панели быстрых настроек", onAddTile)
             }
+        }
+
+        SectionTitle("Обновления")
+        UpdatePanel(settings, update, onCheckUpdates, onInstallUpdate, onUpdateChannel) { value ->
+            onUpdate(false) { it.copy(autoUpdateCheck = value) }
         }
 
         // Всё техническое спрятано: обычному пользователю хватает того, что выше.
@@ -912,4 +927,97 @@ private fun TagFilterDialog(current: Set<String>, known: Set<String>, onDismiss:
             }
         },
     )
+}
+
+/**
+ * Обновления: текущая версия, канал (стабильный или dev), проверка и
+ * установка найденной версии, автопроверка при запуске.
+ */
+@Composable
+private fun UpdatePanel(
+    settings: AppSettings,
+    update: UpdateState,
+    onCheck: () -> Unit,
+    onInstall: () -> Unit,
+    onChannel: (UpdateChannel) -> Unit,
+    onAutoCheck: (Boolean) -> Unit,
+) {
+    Panel(Modifier.fillMaxWidth()) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 6.dp)) {
+            RowIcon(Icons.Rounded.SystemUpdate)
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text("KVN ${Updater.currentVersion}", fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                Text(
+                    when (update) {
+                        UpdateState.Idle -> if (settings.lastUpdateCheck > 0) {
+                            "Проверено " + DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(settings.lastUpdateCheck))
+                        } else {
+                            "Обновления ещё не проверялись"
+                        }
+                        UpdateState.Checking -> "Проверяю…"
+                        UpdateState.UpToDate -> "Установлена последняя версия"
+                        is UpdateState.Available -> "Доступна ${update.info.versionName}"
+                        is UpdateState.Downloading -> "Скачиваю ${update.info.versionName}: ${(update.progress * 100).toInt()}%"
+                        is UpdateState.Ready -> "${update.info.versionName} скачана — установите"
+                        is UpdateState.Failed -> update.message
+                    },
+                    color = when (update) {
+                        is UpdateState.Available, is UpdateState.Ready -> Palette.Green
+                        is UpdateState.Failed -> Palette.Red
+                        else -> Palette.TextSecondary
+                    },
+                    fontSize = 12.sp,
+                    maxLines = 2,
+                )
+            }
+            if (update == UpdateState.Checking) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = Palette.VioletSoft)
+        }
+        if (update is UpdateState.Downloading) {
+            LinearProgressIndicator(
+                progress = { update.progress },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 6.dp)
+                    .height(4.dp)
+                    .clip(RoundedCornerShape(2.dp)),
+                color = Palette.Violet,
+                trackColor = Palette.SurfaceHighest,
+            )
+        }
+        // Канал: две кнопки, выбранная подсвечена.
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(vertical = 6.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(Palette.Background)
+                .padding(3.dp),
+        ) {
+            UpdateChannel.entries.forEach { channel ->
+                val active = channel == settings.updateChannel
+                Box(
+                    Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(if (active) Palette.Violet else androidx.compose.ui.graphics.Color.Transparent)
+                        .clickable { if (!active) onChannel(channel) }
+                        .padding(vertical = 8.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(channel.title, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = if (active) Palette.TextPrimary else Palette.TextSecondary)
+                }
+            }
+        }
+        Text(settings.updateChannel.description, color = Palette.TextMuted, fontSize = 11.sp, modifier = Modifier.padding(bottom = 4.dp))
+        Divider()
+        when (update) {
+            is UpdateState.Available -> ValueRow(Icons.Rounded.Update, "Обновить до ${update.info.versionName}", "Скачать и установить", onInstall)
+            is UpdateState.Ready -> ValueRow(Icons.Rounded.Update, "Установить ${update.info.versionName}", "", onInstall)
+            is UpdateState.Downloading, UpdateState.Checking -> Unit
+            else -> ValueRow(Icons.Rounded.Update, "Проверить обновления", "", onCheck)
+        }
+        Divider()
+        ToggleRow(Icons.Rounded.Sync, "Проверять при запуске", "Не чаще раза в 12 часов", settings.autoUpdateCheck, onAutoCheck)
+    }
 }

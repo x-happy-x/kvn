@@ -338,8 +338,14 @@ class Repository(private val context: Context) {
                 failover = prefs.getBoolean("autoFailover", true),
             ),
             onboarded = prefs.getBoolean("onboarded", false),
-            serverSort = ServerSort.of(prefs.getString("serverSort", null)),
-            serverView = ServerView.of(prefs.getString("serverView", null)),
+            serverGrouping = ServerGrouping.of(prefs.getString("serverGrouping", null)),
+            updateChannel = UpdateChannel.of(prefs.getString("updateChannel", null)) ?: UpdateChannel.default,
+            autoUpdateCheck = prefs.getBoolean("autoUpdateCheck", true),
+            lastUpdateCheck = prefs.getLong("lastUpdateCheck", 0),
+            // Ключи с «2»: у прежних значений другой смысл (сортировка была и группировкой).
+            serverSort = ServerSort.of(prefs.getString("serverSort2", null)),
+            serverView = ServerView.of(prefs.getString("serverView2", null)),
+            serverOrder = prefs.getString("serverOrder", null)?.split('\n')?.filter { it.isNotEmpty() }.orEmpty(),
             advanced = prefs.getBoolean("advanced", false),
             checks = CheckOptions().let { d ->
                 CheckOptions(
@@ -403,8 +409,13 @@ class Repository(private val context: Context) {
             .putInt("autoFailures", settings.auto.failures)
             .putBoolean("autoFailover", settings.auto.failover)
             .putBoolean("onboarded", settings.onboarded)
-            .putString("serverSort", settings.serverSort.id)
-            .putString("serverView", settings.serverView.id)
+            .putString("serverGrouping", settings.serverGrouping.id)
+            .putString("updateChannel", settings.updateChannel.id)
+            .putBoolean("autoUpdateCheck", settings.autoUpdateCheck)
+            .putLong("lastUpdateCheck", settings.lastUpdateCheck)
+            .putString("serverSort2", settings.serverSort.id)
+            .putString("serverView2", settings.serverView.id)
+            .putString("serverOrder", settings.serverOrder.joinToString("\n"))
             .putBoolean("advanced", settings.advanced)
             .putString("pingMethod", settings.checks.pingMethod.id)
             .putInt("pingTimeoutMs", settings.checks.pingTimeoutMs)

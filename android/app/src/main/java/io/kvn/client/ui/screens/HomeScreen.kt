@@ -54,6 +54,9 @@ import io.kvn.client.core.Engine
 import io.kvn.client.data.ServerNode
 import io.kvn.client.data.Subscription
 import io.kvn.client.ui.Traffic
+import io.kvn.client.ui.UpdateState
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.material.icons.rounded.SystemUpdate
 import io.kvn.client.ui.components.AppearIn
 import io.kvn.client.ui.components.FlagBadge
 import io.kvn.client.ui.components.RollingText
@@ -86,6 +89,9 @@ fun HomeScreen(
     onHelp: () -> Unit = {},
     findingBest: Boolean = false,
     onFindBest: () -> Unit = {},
+    pingStale: Boolean = false,
+    update: UpdateState = UpdateState.Idle,
+    onUpdate: () -> Unit = {},
 ) {
     val power = when (state) {
         is VpnState.Connected -> PowerState.ON
@@ -103,6 +109,10 @@ fun HomeScreen(
     ) {
         // Блоки появляются по очереди — экран «собирается», а не возникает целиком.
         AppearIn(0) { Header(power, engine, auto, onOpenSettings, onHelp) }
+        // Найдено обновление — небольшая плашка под шапкой.
+        AnimatedVisibility(visible = update is UpdateState.Available || update is UpdateState.Downloading || update is UpdateState.Ready) {
+            UpdateBanner(update, onUpdate)
+        }
         Spacer(Modifier.height(20.dp))
 
         AppearIn(1) { PowerButton(state = power, onClick = onToggle) }
@@ -123,7 +133,7 @@ fun HomeScreen(
                 contentKey = { it?.id },
                 label = "server",
             ) { current ->
-                if (current != null) ServerPanel(current, ping, engine, findingBest, onFindBest, onOpenServers) else EmptyPanel(onAddSubscription)
+                if (current != null) ServerPanel(current, ping, pingStale, engine, findingBest, onFindBest, onOpenServers) else EmptyPanel(onAddSubscription)
             }
         }
         if (subscription != null && (subscription.total > 0 || subscription.expire > 0 || subscription.announce.isNotEmpty())) {
@@ -288,7 +298,7 @@ private fun TrafficCell(icon: ImageVector, label: String, speed: String, total: 
 }
 
 @Composable
-private fun ServerPanel(node: ServerNode, ping: Int?, engine: Engine, findingBest: Boolean, onFindBest: () -> Unit, onClick: () -> Unit) {
+private fun ServerPanel(node: ServerNode, ping: Int?, pingStale: Boolean, engine: Engine, findingBest: Boolean, onFindBest: () -> Unit, onClick: () -> Unit) {
     Panel(modifier = Modifier.fillMaxWidth(), onClick = onClick) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             FlagBadge(node.flag, size = 44)
@@ -308,7 +318,7 @@ private fun ServerPanel(node: ServerNode, ping: Int?, engine: Engine, findingBes
                     Text(protocolLabel(node.type), color = Palette.TextSecondary, fontSize = 12.sp)
                     Spacer(Modifier.width(10.dp))
                     if (node.supports(engine)) {
-                        PingText(ping)
+                        PingText(ping, stale = pingStale)
                     } else {
                         Text("не для ${engine.title}", color = Palette.Amber, fontSize = 12.sp)
                     }
@@ -396,5 +406,31 @@ private fun SubscriptionPanel(subscription: Subscription) {
             Spacer(Modifier.height(4.dp))
             Text("Трафик без ограничений", color = Palette.TextSecondary, fontSize = 12.sp)
         }
+    }
+}
+
+/** Плашка обновления на главной: версия и кнопка, во время загрузки — проценты. */
+@Composable
+private fun UpdateBanner(update: UpdateState, onUpdate: () -> Unit) {
+    val (title, action) = when (update) {
+        is UpdateState.Available -> "Доступна версия ${update.info.versionName}" to "Обновить"
+        is UpdateState.Downloading -> "Скачиваю ${update.info.versionName}" to "${(update.progress * 100).toInt()}%"
+        is UpdateState.Ready -> "${update.info.versionName} скачана" to "Установить"
+        else -> return
+    }
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(top = 12.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(Palette.Violet.copy(alpha = 0.16f))
+            .clickable(enabled = update !is UpdateState.Downloading, onClick = onUpdate)
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Rounded.SystemUpdate, null, tint = Palette.VioletSoft, modifier = Modifier.size(20.dp))
+        Spacer(Modifier.width(10.dp))
+        Text(title, fontSize = 13.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
+        Text(action, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Palette.VioletSoft)
     }
 }

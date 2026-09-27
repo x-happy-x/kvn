@@ -140,15 +140,17 @@ fun Chip(text: String, color: Color = Palette.TextSecondary, modifier: Modifier 
 
 /** Точка-индикатор с подписью пинга. */
 @Composable
-fun PingText(ms: Int?, modifier: Modifier = Modifier) {
+fun PingText(ms: Int?, modifier: Modifier = Modifier, stale: Boolean = false) {
+    // Устаревший пинг (старый или из другой сети) — серый: верить ему не стоит.
+    val color = if (stale && ms != null) Palette.TextMuted else pingColor(ms)
     Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         Box(
             Modifier
                 .size(7.dp)
                 .clip(CircleShape)
-                .background(pingColor(ms)),
+                .background(color),
         )
-        Text(text = pingLabel(ms), color = pingColor(ms), fontSize = 12.sp, fontWeight = FontWeight.Medium)
+        Text(text = pingLabel(ms), color = color, fontSize = 12.sp, fontWeight = FontWeight.Medium)
     }
 }
 

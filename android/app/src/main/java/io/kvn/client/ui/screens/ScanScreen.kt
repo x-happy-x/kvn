@@ -11,6 +11,7 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.material.icons.rounded.Dns
 import androidx.compose.material.icons.rounded.Insights
 import androidx.compose.material.icons.rounded.Language
@@ -90,6 +91,47 @@ import io.kvn.client.ui.theme.Palette
 /** Вкладки экрана проверок. */
 private enum class CheckTab(val title: String) { SITES("Сайты"), SERVERS("Серверы"), STATS("Статистика") }
 
+/** Пояснение к вкладке: что проверяется и на что влияет (показывается по «?»). */
+@Composable
+private fun TabHelp(tab: CheckTab, onDismiss: () -> Unit) {
+    val (icon, title, what, effect) = when (tab) {
+        CheckTab.SITES -> HelpText(
+            Icons.Rounded.Language,
+            "Открываются ли сайты",
+            "Каждый сайт — двумя путями: напрямую через оператора и через VPN. По шагам: адрес (DNS) → соединение → TLS → ответ сайта → загрузка.",
+            "Сама проверка ничего не меняет. Она показывает, что режет оператор и помогает ли VPN. Сайт, который открывается напрямую, можно в подробностях добавить в «Сайты напрямую».",
+        )
+        CheckTab.SERVERS -> HelpText(
+            Icons.Rounded.Dns,
+            "Работают ли серверы",
+            "Каждый сервер по очереди открывает адрес проверки через себя — в отдельном экземпляре ядра, подключённый VPN не трогается. Видно и те, что пингуются, но ничего не открывают.",
+            "Результаты идут в статистику: авто-режим, «Найти лучший» и порядок пинга выбирают надёжные серверы первыми, а «молчащие» опускаются вниз.",
+        )
+        CheckTab.STATS -> HelpText(
+            Icons.Rounded.Insights,
+            "Как копится статистика",
+            "Каждый пинг, проверка серверов и выбор в авто-режиме записываются — отдельно для Wi-Fi и мобильной сети. Надёжность — доля успешных проверок, свежие весят больше старых.",
+            "По ней работают авто-режим и «Найти лучший», с неё начинается пинг, по ней группировка и порядок «По доступности».",
+        )
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Palette.SurfaceHigh,
+        icon = { Icon(icon, null, tint = Palette.VioletSoft) },
+        title = { Text(title) },
+        text = {
+            Column {
+                InfoLine("Что проверяется", what)
+                Spacer(Modifier.height(10.dp))
+                InfoLine("На что влияет", effect)
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Понятно") } },
+    )
+}
+
+private data class HelpText(val icon: ImageVector, val title: String, val what: String, val effect: String)
+
 /**
  * Экран «Проверка»: три вкладки. «Сайты» — открываются ли ресурсы напрямую и
  * через VPN (как в HomeNet), «Серверы» — пропускает ли трафик каждый сервер,
@@ -117,15 +159,29 @@ fun ScanScreen(
     stats: StatsReport? = null,
     onResetStats: () -> Unit = {},
     onAddToWhitelist: (String) -> Unit = {},
+    networkLabel: String = "",
 ) {
     var tab by rememberSaveable { mutableStateOf(CheckTab.SITES) }
+    var help by remember { mutableStateOf(false) }
+    if (help) TabHelp(tab) { help = false }
     Column(Modifier.fillMaxSize()) {
-        Text(
-            "Проверка",
-            fontSize = 26.sp,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(start = 20.dp, top = 16.dp, bottom = 8.dp),
-        )
+        Row(
+            Modifier.padding(start = 20.dp, end = 16.dp, top = 16.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("Проверка", fontSize = 26.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+            // Что проверяет открытая вкладка — во всплывающем окне.
+            Box(
+                Modifier
+                    .size(34.dp)
+                    .clip(CircleShape)
+                    .background(Palette.Surface)
+                    .clickable { help = true },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text("?", color = Palette.TextSecondary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            }
+        }
         TabSwitch(tab) { tab = it }
         AnimatedContent(
             targetState = tab,
@@ -139,7 +195,7 @@ fun ScanScreen(
             when (current) {
                 CheckTab.SITES -> SitesCheck(presets, targets, results, progress, vpnConnected, onAdd, onRemove, onClear, onRun, onRunOne, onStop, onAddToWhitelist)
                 CheckTab.SERVERS -> ServersCheck(nodes, nodeTests, nodeTestProgress, onTestNodes, onStopNodeTests)
-                CheckTab.STATS -> StatsView(stats, onResetStats)
+                CheckTab.STATS -> StatsView(stats, networkLabel, onResetStats)
             }
         }
     }
@@ -177,37 +233,6 @@ private fun TabSwitch(selected: CheckTab, onSelect: (CheckTab) -> Unit) {
                 )
             }
         }
-    }
-}
-
-/** Карточка «что проверяется и на что влияет» в начале вкладки. */
-@Composable
-private fun InfoCard(icon: ImageVector, title: String, what: String, effect: String) {
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(18.dp))
-            .background(Brush.linearGradient(listOf(Palette.Violet.copy(alpha = 0.16f), Palette.Surface)))
-            .border(1.dp, Palette.Stroke, RoundedCornerShape(18.dp))
-            .padding(14.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                Modifier
-                    .size(34.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(Palette.Violet.copy(alpha = 0.22f)),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(icon, null, tint = Palette.VioletSoft, modifier = Modifier.size(18.dp))
-            }
-            Spacer(Modifier.width(10.dp))
-            Text(title, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-        }
-        Spacer(Modifier.height(10.dp))
-        InfoLine("Что проверяется", what)
-        Spacer(Modifier.height(6.dp))
-        InfoLine("На что влияет", effect)
     }
 }
 
@@ -305,14 +330,7 @@ private fun SitesCheck(
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         item(key = "info") {
-            InfoCard(
-                Icons.Rounded.Language,
-                "Открываются ли сайты",
-                "Каждый сайт — двумя путями: напрямую через оператора и через VPN. По шагам: адрес (DNS) → соединение → TLS → ответ сайта → загрузка.",
-                "Сама проверка ничего не меняет. Она показывает, что режет оператор и помогает ли VPN. Сайты, которые открываются напрямую, можно одной кнопкой добавить в «Сайты напрямую».",
-            )
             if (!vpnConnected) {
-                Spacer(Modifier.height(8.dp))
                 Text(
                     "VPN выключен — проверяется только прямой путь. Подключитесь, чтобы сравнить с VPN.",
                     color = Palette.Amber,
@@ -590,14 +608,6 @@ private fun ServersCheck(
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        item(key = "info") {
-            InfoCard(
-                Icons.Rounded.Dns,
-                "Работают ли серверы",
-                "Каждый сервер по очереди открывает адрес проверки через себя — в отдельном экземпляре ядра, подключённый VPN не трогается. Видно и те, что пингуются, но ничего не открывают.",
-                "Результаты идут в статистику: авто-режим, «Найти лучший» и порядок пинга выбирают надёжные серверы первыми, а «молчащие» опускаются вниз.",
-            )
-        }
         item(key = "controls") {
             Column {
                 if (tests.isNotEmpty()) {
@@ -679,19 +689,19 @@ private fun NodeTestRow(node: ServerNode, test: NodeTest?, running: Boolean) {
  * мера (доля успешных проверок), цвет — статус с подписью в процентах.
  */
 @Composable
-private fun StatsView(stats: StatsReport?, onReset: () -> Unit) {
+private fun StatsView(stats: StatsReport?, networkLabel: String, onReset: () -> Unit) {
     var confirmReset by remember { mutableStateOf(false) }
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        item(key = "info") {
-            InfoCard(
-                Icons.Rounded.Insights,
-                "Как копится статистика",
-                "Каждый пинг, каждая проверка серверов и выбор в авто-режиме записываются. Надёжность — доля успешных проверок, свежие весят больше старых. Серверы узнаются по адресу, так что история переживает переименования и общая для обоих ядер.",
-                "По ней работают авто-режим и «Найти лучший», с неё начинается пинг, по ней сортировка «По доступности».",
+        item(key = "network") {
+            Text(
+                "История для сети: $networkLabel",
+                color = Palette.TextMuted,
+                fontSize = 12.sp,
+                modifier = Modifier.padding(start = 4.dp),
             )
         }
         if (stats == null || stats.empty) {
@@ -716,10 +726,11 @@ private fun StatsView(stats: StatsReport?, onReset: () -> Unit) {
             return@LazyColumn
         }
         item(key = "hero") {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                HeroTile("${(stats.reliability * 100).roundToInt()}%", "средняя надёжность", Modifier.weight(1f))
-                HeroTile("${stats.workingServers}/${stats.checkedServers}", "серверов работает", Modifier.weight(1f))
-                HeroTile(if (stats.avgMs > 0) "${stats.avgMs}" else "—", "мс в среднем", Modifier.weight(1f))
+            // Одинаковая высота плиток: по самой высокой.
+            Row(Modifier.height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                HeroTile("${(stats.reliability * 100).roundToInt()}%", "надёжность", Modifier.weight(1f).fillMaxHeight())
+                HeroTile("${stats.workingServers}/${stats.checkedServers}", "работают", Modifier.weight(1f).fillMaxHeight())
+                HeroTile(if (stats.avgMs > 0) "${stats.avgMs}" else "—", "мс, пинг", Modifier.weight(1f).fillMaxHeight())
             }
             Text(
                 "Проверок: ${stats.totalChecks} · проверено ${stats.checkedServers} из ${stats.totalServers} серверов",
@@ -792,7 +803,7 @@ private fun HeroTile(value: String, label: String, modifier: Modifier) {
             .padding(horizontal = 12.dp, vertical = 12.dp),
     ) {
         Text(value, fontSize = 24.sp, fontWeight = FontWeight.Bold, color = Palette.TextPrimary, maxLines = 1)
-        Text(label, fontSize = 11.sp, color = Palette.TextMuted, maxLines = 2, lineHeight = 14.sp)
+        Text(label, fontSize = 11.sp, color = Palette.TextMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 

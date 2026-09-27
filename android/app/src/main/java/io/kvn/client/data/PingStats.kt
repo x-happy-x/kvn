@@ -73,8 +73,13 @@ data class PingRecord(
 /**
  * Статистика пингов по серверам. Ключ — адрес и порт, а не имя: так история
  * переживает переименования в подписке и общая у обоих ядер.
+ *
+ * История копится отдельно для Wi-Fi и мобильной сети ([kindOf] — класс
+ * текущей сети): сервер, который работает дома, может быть заблокирован у
+ * мобильного оператора. Записи без класса (до разделения) остаются общими и
+ * используются, пока для сети своей истории нет.
  */
-class PingStats(context: Context) {
+class PingStats(context: Context, private val kindOf: () -> String = { "" }) {
     private val prefs = context.getSharedPreferences("ping_stats", Context.MODE_PRIVATE)
     private val records = mutableMapOf<String, PingRecord>()
 
@@ -88,23 +93,37 @@ class PingStats(context: Context) {
         }
     }
 
+    private fun scoped(key: String, kind: String = kindOf()): String = if (kind.isEmpty()) key else "$kind|$key"
+
+    private fun lookup(key: String, kind: String = kindOf()): PingRecord? = records[scoped(key, kind)] ?: records[key]
+
     @Synchronized
-    fun get(node: ServerNode): PingRecord? = records[keyOf(node)]
+    fun get(node: ServerNode): PingRecord? = lookup(keyOf(node))
 
     @Synchronized
     fun record(node: ServerNode, success: Boolean, ms: Int) {
         val key = keyOf(node)
-        records[key] = (records[key] ?: PingRecord()).record(success, ms)
+        val scopedKey = scoped(key)
+        // Первая запись для сети начинается с общей истории, а не с нуля.
+        records[scopedKey] = (records[scopedKey] ?: records[key] ?: PingRecord()).record(success, ms)
     }
 
     /** Порядок проверки: сначала те, что чаще работают и отвечают быстрее. */
     @Synchronized
     fun order(nodes: List<ServerNode>): List<ServerNode> =
-        nodes.sortedByDescending { records[keyOf(it)]?.score ?: UNKNOWN_SCORE }
+        nodes.sortedByDescending { lookup(keyOf(it))?.score ?: UNKNOWN_SCORE }
 
-    /** Копия всей истории: ключ — адрес:порт (см. [keyOf]). */
+    /** История для текущей сети: ключ — адрес:порт (см. [keyOf]). */
     @Synchronized
-    fun snapshot(): Map<String, PingRecord> = records.toMap()
+    fun snapshot(kind: String = kindOf()): Map<String, PingRecord> {
+        val out = mutableMapOf<String, PingRecord>()
+        records.forEach { (key, value) -> if ('|' !in key) out[key] = value }
+        if (kind.isNotEmpty()) {
+            val prefix = "$kind|"
+            records.forEach { (key, value) -> if (key.startsWith(prefix)) out[key.removePrefix(prefix)] = value }
+        }
+        return out
+    }
 
     /** Забыть всю историю проверок. */
     @Synchronized
@@ -116,8 +135,8 @@ class PingStats(context: Context) {
     @Synchronized
     fun save() {
         val json = JSONObject()
-        // Держим не больше 500 серверов: самые давно работавшие уходят первыми.
-        records.entries.sortedByDescending { it.value.lastOkAt }.take(500).forEach { (key, value) -> json.put(key, value.toJson()) }
+        // Держим не больше 1000 записей: самые давно работавшие уходят первыми.
+        records.entries.sortedByDescending { it.value.lastOkAt }.take(1000).forEach { (key, value) -> json.put(key, value.toJson()) }
         prefs.edit().putString("stats", json.toString()).apply()
     }
 

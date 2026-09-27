@@ -215,19 +215,35 @@ enum class WifiMode(val id: String, val title: String) {
     }
 }
 
-/** Порядок серверов на экране «Серверы». */
-enum class ServerSort(val id: String, val title: String) {
-    /** Как в подписках, с заголовками подписок. */
+/** Группировка серверов на экране «Серверы». */
+enum class ServerGrouping(val id: String, val title: String) {
+    /** По подпискам, с заголовками подписок. */
     SUBSCRIPTIONS("subscriptions", "По подпискам"),
 
-    /** Общим списком: сначала быстрые по последнему пингу, недоступные — в конце. */
+    /** По пингу: до 100 мс, 100–250, 250–500, дольше, нет ответа. */
     PING("ping", "По пингу"),
 
-    /** Общим списком: сначала те, что чаще работают (история проверок). */
+    /** По надёжности из истории проверок. */
     RELIABILITY("reliability", "По доступности");
 
     companion object {
-        fun of(id: String?): ServerSort = entries.firstOrNull { it.id == id } ?: SUBSCRIPTIONS
+        fun of(id: String?): ServerGrouping = entries.firstOrNull { it.id == id } ?: SUBSCRIPTIONS
+    }
+}
+
+/** Порядок серверов внутри группы. */
+enum class ServerSort(val id: String, val title: String) {
+    /** Свой порядок: перетаскиванием, новые — как в подписке. */
+    DEFAULT("default", "Свой порядок"),
+
+    /** Сначала быстрые по последнему пингу, недоступные — в конце. */
+    PING("ping", "По пингу"),
+
+    /** Сначала те, что чаще работают (история проверок). */
+    RELIABILITY("reliability", "По доступности");
+
+    companion object {
+        fun of(id: String?): ServerSort = entries.firstOrNull { it.id == id } ?: DEFAULT
     }
 }
 
@@ -238,7 +254,7 @@ enum class ServerView(val id: String, val title: String) {
     CARDS("cards", "Карточки");
 
     companion object {
-        fun of(id: String?): ServerView = entries.firstOrNull { it.id == id } ?: LIST
+        fun of(id: String?): ServerView = entries.firstOrNull { it.id == id } ?: COMPACT
     }
 }
 
@@ -292,11 +308,18 @@ data class AppSettings(
     val auto: AutoOptions = AutoOptions(),
     /** Вводная инструкция пройдена (или пропущена). */
     val onboarded: Boolean = false,
-    val serverSort: ServerSort = ServerSort.SUBSCRIPTIONS,
-    val serverView: ServerView = ServerView.LIST,
+    val serverGrouping: ServerGrouping = ServerGrouping.SUBSCRIPTIONS,
+    val serverSort: ServerSort = ServerSort.DEFAULT,
+    val serverView: ServerView = ServerView.COMPACT,
+    /** Свой порядок серверов (id), заданный перетаскиванием. */
+    val serverOrder: List<String> = emptyList(),
     /** Показывать настройки для опытных: ядро, DNS, обход блокировок, диагностику. */
     val advanced: Boolean = false,
     val checks: CheckOptions = CheckOptions(),
+    val updateChannel: UpdateChannel = UpdateChannel.default,
+    /** Проверять обновления при запуске (не чаще раза в 12 часов). */
+    val autoUpdateCheck: Boolean = true,
+    val lastUpdateCheck: Long = 0,
 ) {
     /** Настройки в формате libcore Options. */
     fun coreOptions(mtu: Int): String = JSONObject().apply {
